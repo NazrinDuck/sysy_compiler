@@ -1,6 +1,10 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 pub trait DumpIR {
     fn dump_ir(&self) -> String;
 }
+
+static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 pub struct CompUnit {
@@ -45,38 +49,132 @@ impl DumpIR for FuncType {
 }
 
 #[derive(Debug)]
+pub enum PrimaryExp {
+    Exp(Box<Exp>),
+    Number(i32),
+}
+
+impl DumpIR for PrimaryExp {
+    fn dump_ir(&self) -> String {
+        match self {
+            PrimaryExp::Exp(exp) => exp.dump_ir(),
+            PrimaryExp::Number(num) => num.to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Exp {
+    pub unary_exp: UnaryExp,
+}
+
+impl DumpIR for Exp {
+    fn dump_ir(&self) -> String {
+        self.unary_exp.dump_ir()
+    }
+}
+
+#[derive(Debug)]
+pub enum UnaryExp {
+    PrimaryExp(Box<PrimaryExp>),
+    Unary((UnaryOp, Box<UnaryExp>)),
+}
+
+impl DumpIR for UnaryExp {
+    fn dump_ir(&self) -> String {
+        match self {
+            UnaryExp::PrimaryExp(primary_exp) => (*primary_exp).dump_ir(),
+            UnaryExp::Unary((unary_op, unary_exp)) => {
+                let unary_exp_ir: String = (*unary_exp).dump_ir();
+
+                let mut unary_ir: String;
+
+                let cnt = COUNT.load(Ordering::Relaxed);
+                if !unary_exp_ir.contains("\n") {
+                    if cnt == 0 {
+                        match *unary_op {
+                            UnaryOp::Positive => {
+                                unary_ir = unary_exp_ir.to_string();
+                            }
+                            UnaryOp::Negative => {
+                                unary_ir =
+                                    format!("\t%{} = sub 0, {}\n", cnt, unary_exp_ir,).to_string();
+                                COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
+                            UnaryOp::Not => {
+                                unary_ir = format!("\t%{} = eq {}, 0\n", cnt, unary_exp_ir);
+                                COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
+                        };
+                    } else {
+                        match *unary_op {
+                            UnaryOp::Positive => {
+                                unary_ir = unary_exp_ir.to_string();
+                            }
+                            UnaryOp::Negative => {
+                                unary_ir = format!("\t%{} = sub {}, %{}\n", cnt, unary_exp_ir, cnt)
+                                    .to_string();
+                                COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
+                            UnaryOp::Not => {
+                                unary_ir = format!("\t%{} = eq {}, 0\n", cnt, unary_exp_ir);
+                                COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
+                        };
+                    }
+                } else {
+                    unary_ir = unary_exp_ir.to_string();
+
+                    match *unary_op {
+                        UnaryOp::Positive => (),
+                        UnaryOp::Negative => {
+                            unary_ir += &format!("\t%{} = sub 0, %{}\n", cnt, cnt - 1).to_string();
+                            COUNT.fetch_add(1, Ordering::Relaxed);
+                        }
+                        UnaryOp::Not => {
+                            unary_ir += &format!("\t%{} = eq %{}, 0\n", cnt, cnt - 1);
+                            COUNT.fetch_add(1, Ordering::Relaxed);
+                        }
+                    };
+                };
+
+                unary_ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum UnaryOp {
+    Positive,
+    Negative,
+    Not,
+}
+
+#[derive(Debug)]
 pub struct Block {
     pub stmt: Stmt,
 }
 
 impl DumpIR for Block {
     fn dump_ir(&self) -> String {
-        format!(
-            r"
-%enter:
-    ret {}
-",
-            self.stmt.dump_ir()
-        )
+        let stmt_ir: String = self.stmt.dump_ir();
+        let cnt = COUNT.load(Ordering::Relaxed);
+        if cnt == 0 {
+            format!("\n%enter:\n\tret {}\n", stmt_ir)
+        } else {
+            format!("\n%enter:\n{}\tret %{}\n", stmt_ir, cnt - 1)
+        }
     }
 }
 
-pub type IntConst = i32;
-
-/*
-#[derive(Debug)]
-pub struct Number {
-    pub int_const: IntConst,
-}
-*/
-
 #[derive(Debug)]
 pub struct Stmt {
-    pub num: i32,
+    pub exp: Exp,
 }
 
 impl DumpIR for Stmt {
     fn dump_ir(&self) -> String {
-        self.num.to_string()
+        self.exp.dump_ir()
     }
 }

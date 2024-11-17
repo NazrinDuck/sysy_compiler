@@ -27,22 +27,26 @@ fn main() -> std::io::Result<()> {
     let ast = sys::CompUnitParser::new().parse(&source_code).unwrap();
     println!("{:#?}", ast);
     let ast = ast.dump_ir();
-
-    let driver = koopa::front::Driver::from(ast.clone());
-    let program = driver.generate_program().unwrap();
+    println!("\x1b[01;32mast:\n{}\x1b[0m", ast);
 
     match &mode[..] {
         "-koopa" => generate_file(out_file, ast.clone()).unwrap(),
-        "-riscv" => generate_file(out_file, program.dump_asm()).unwrap(),
+        "-riscv" => {
+            let driver = koopa::front::Driver::from(ast.clone());
+            let program = driver.generate_program().unwrap();
+            let asm: String = program.dump_asm();
+
+            generate_file(out_file, asm.clone()).unwrap();
+            println!("\x1b[01;36masm:\n{}\x1b[0m", asm);
+        }
         _ => (),
     }
 
+    // let a: ast::UnaryExp = ast::UnaryExp::PrimaryExp(Box::new(ast::PrimaryExp::Number(12)));
     // 调用 lalrpop 生成的 parser 解析输入文件
 
     //parser(program);
 
-    println!("\x1b[01;32mast:\n{}\x1b[0m", ast);
-    println!("\x1b[01;32masm:\n{}\x1b[0m", program.dump_asm());
     Ok(())
 }
 
