@@ -1,5 +1,5 @@
 use asm::DumpAsm;
-use ast::DumpIR;
+use ast::{DumpIR, TemSyms};
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
@@ -26,7 +26,7 @@ fn main() -> std::io::Result<()> {
 
     let ast = sys::CompUnitParser::new().parse(&source_code).unwrap();
     println!("{:#?}", ast);
-    let ast = ast.dump_ir();
+    let ast = ast.dump_ir(&mut TemSyms::new());
     println!("\x1b[01;32mast:\n{}\x1b[0m", ast);
 
     match &mode[..] {

@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, Block, FuncDef, FuncType, Stmt, IntConst};
+use crate::ast::{CompUnit, Block, FuncDef, FuncType, Stmt, Exp, PrimaryExp, UnaryExp, UnaryOp, AddExp, AddOp, MulExp, MulOp};
 //use crate::ast::*;
 
 // lalrpop 里的约定
@@ -29,7 +29,46 @@ FuncType: FuncType = "int" => FuncType::Int;
 
 Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
-Stmt: Stmt = "return" <num: Number> ";" => Stmt { <> };
+Stmt: Stmt = "return" <exp: Exp> ";" => Stmt { <> };
+
+Exp: Exp = <add_exp: AddExp> => Exp { <> };
+
+PrimaryExp: PrimaryExp = {
+  "(" <exp: Exp> ")" => PrimaryExp::Exp(Box::new( <> )),
+  <num: Number> => PrimaryExp::Number( <> ),
+};
+
+UnaryExp: UnaryExp = {
+  <primary_exp: PrimaryExp> => UnaryExp::PrimaryExp(Box::new( <> )),
+  <unary_op: UnaryOp> <unary_exp: UnaryExp> => UnaryExp::Exp((unary_op, Box::new(unary_exp))),
+};
+
+MulExp: MulExp =  {
+  <unary_exp: UnaryExp> => MulExp::UnaryExp(Box::new( <> )),
+  <mul_exp: MulExp> <mul_op: MulOp> <unary_exp: UnaryExp> => MulExp::Exp((Box::new(mul_exp), mul_op, Box::new(unary_exp))),
+};
+
+AddExp: AddExp = {
+  <mul_exp: MulExp> => AddExp::MulExp(Box::new( <> )),
+  <add_exp: AddExp> <add_op: AddOp> <mul_exp: MulExp> => AddExp::Exp((Box::new(add_exp), add_op, Box::new(mul_exp))),
+};
+
+UnaryOp: UnaryOp = {
+  "+" => UnaryOp::Positive,
+  "-" => UnaryOp::Negative,
+  "!" => UnaryOp::Not,
+};
+
+AddOp: AddOp = {
+  "+" => AddOp::Add,
+  "-" => AddOp::Sub,
+};
+
+MulOp: MulOp = {
+  "*" => MulOp::Mul,
+  "/" => MulOp::Div,
+  "%" => MulOp::Mod,
+};
 
 Number: i32 = <num: IntConst> => <>;
 //

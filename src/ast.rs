@@ -1,10 +1,38 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 pub trait DumpIR {
-    fn dump_ir(&self) -> String;
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String;
 }
 
-static COUNT: AtomicUsize = AtomicUsize::new(0);
+pub struct TemSyms {
+    symbols: Vec<(String, bool, Option<u32>)>,
+    count: u32,
+}
+
+impl TemSyms {
+    pub fn new() -> Self {
+        TemSyms {
+            symbols: Vec::new(),
+            count: 0,
+        }
+    }
+
+    fn get_new_sym(&mut self) -> String {
+        let symbol: String = format!("%{}", self.count);
+        self.symbols.push((symbol.clone(), true, Some(self.count)));
+        self.count += 1;
+        symbol
+    }
+
+    fn find_sym(&self, val: u32) -> Result<String, String> {
+        for sym in self.symbols.clone() {
+            if let Some(sym_val) = sym.2 {
+                if sym_val == val && sym.1 {
+                    return Ok(sym.0);
+                }
+            }
+        }
+        Err(format!("can't find fitable temporary symbols: {}", val).to_string())
+    }
+}
 
 #[derive(Debug)]
 pub struct CompUnit {
@@ -12,8 +40,8 @@ pub struct CompUnit {
 }
 
 impl DumpIR for CompUnit {
-    fn dump_ir(&self) -> String {
-        self.func_def.dump_ir()
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        self.func_def.dump_ir(tem_syms)
     }
 }
 
@@ -25,12 +53,12 @@ pub struct FuncDef {
 }
 
 impl DumpIR for FuncDef {
-    fn dump_ir(&self) -> String {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
         format!(
             "fun @{ident}(): {func_type} {{{block}}}",
             ident = self.ident,
-            func_type = self.func_type.dump_ir(),
-            block = self.block.dump_ir()
+            func_type = self.func_type.dump_ir(tem_syms),
+            block = self.block.dump_ir(tem_syms)
         )
     }
 }
@@ -41,7 +69,7 @@ pub enum FuncType {
 }
 
 impl DumpIR for FuncType {
-    fn dump_ir(&self) -> String {
+    fn dump_ir(&self, _: &mut TemSyms) -> String {
         match self {
             FuncType::Int => "i32".to_string(),
         }
@@ -55,9 +83,9 @@ pub enum PrimaryExp {
 }
 
 impl DumpIR for PrimaryExp {
-    fn dump_ir(&self) -> String {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
         match self {
-            PrimaryExp::Exp(exp) => exp.dump_ir(),
+            PrimaryExp::Exp(exp) => exp.dump_ir(tem_syms),
             PrimaryExp::Number(num) => num.to_string(),
         }
     }
@@ -65,80 +93,198 @@ impl DumpIR for PrimaryExp {
 
 #[derive(Debug)]
 pub struct Exp {
-    pub unary_exp: UnaryExp,
+    pub add_exp: AddExp,
 }
 
 impl DumpIR for Exp {
-    fn dump_ir(&self) -> String {
-        self.unary_exp.dump_ir()
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        self.add_exp.dump_ir(tem_syms)
     }
 }
 
 #[derive(Debug)]
 pub enum UnaryExp {
     PrimaryExp(Box<PrimaryExp>),
-    Unary((UnaryOp, Box<UnaryExp>)),
+    Exp((UnaryOp, Box<UnaryExp>)),
 }
 
 impl DumpIR for UnaryExp {
-    fn dump_ir(&self) -> String {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
         match self {
-            UnaryExp::PrimaryExp(primary_exp) => (*primary_exp).dump_ir(),
-            UnaryExp::Unary((unary_op, unary_exp)) => {
-                let unary_exp_ir: String = (*unary_exp).dump_ir();
+            Self::PrimaryExp(primary_exp) => (*primary_exp).dump_ir(tem_syms),
+            Self::Exp((unary_op, unary_exp)) => {
+                let pre_sym = tem_syms.count;
+                let unary_exp_ir: String = (*unary_exp).dump_ir(tem_syms);
+                let unary_sym = tem_syms.count;
 
-                let mut unary_ir: String;
+                let mut ir: String;
 
-                let cnt = COUNT.load(Ordering::Relaxed);
-                if !unary_exp_ir.contains("\n") {
-                    if cnt == 0 {
-                        match *unary_op {
-                            UnaryOp::Positive => {
-                                unary_ir = unary_exp_ir.to_string();
-                            }
-                            UnaryOp::Negative => {
-                                unary_ir =
-                                    format!("\t%{} = sub 0, {}\n", cnt, unary_exp_ir,).to_string();
-                                COUNT.fetch_add(1, Ordering::Relaxed);
-                            }
-                            UnaryOp::Not => {
-                                unary_ir = format!("\t%{} = eq {}, 0\n", cnt, unary_exp_ir);
-                                COUNT.fetch_add(1, Ordering::Relaxed);
-                            }
-                        };
-                    } else {
-                        match *unary_op {
-                            UnaryOp::Positive => {
-                                unary_ir = unary_exp_ir.to_string();
-                            }
-                            UnaryOp::Negative => {
-                                unary_ir = format!("\t%{} = sub {}, %{}\n", cnt, unary_exp_ir, cnt)
+                if unary_sym == pre_sym {
+                    match *unary_op {
+                        UnaryOp::Positive => {
+                            ir = unary_exp_ir.to_string();
+                        }
+                        UnaryOp::Negative => {
+                            ir =
+                                format!("\t{} = sub 0, {}\n", tem_syms.get_new_sym(), unary_exp_ir)
                                     .to_string();
-                                COUNT.fetch_add(1, Ordering::Relaxed);
-                            }
-                            UnaryOp::Not => {
-                                unary_ir = format!("\t%{} = eq {}, 0\n", cnt, unary_exp_ir);
-                                COUNT.fetch_add(1, Ordering::Relaxed);
-                            }
-                        };
+                        }
+                        UnaryOp::Not => {
+                            ir = format!("\t{} = eq {}, 0\n", tem_syms.get_new_sym(), unary_exp_ir);
+                        }
                     }
                 } else {
-                    unary_ir = unary_exp_ir.to_string();
-
+                    ir = unary_exp_ir.to_string();
                     match *unary_op {
                         UnaryOp::Positive => (),
                         UnaryOp::Negative => {
-                            unary_ir += &format!("\t%{} = sub 0, %{}\n", cnt, cnt - 1).to_string();
-                            COUNT.fetch_add(1, Ordering::Relaxed);
+                            ir += &format!(
+                                "\t{} = sub 0, {}\n",
+                                tem_syms.get_new_sym(),
+                                tem_syms.find_sym(unary_sym - 1).unwrap()
+                            );
                         }
                         UnaryOp::Not => {
-                            unary_ir += &format!("\t%{} = eq %{}, 0\n", cnt, cnt - 1);
-                            COUNT.fetch_add(1, Ordering::Relaxed);
+                            ir += &format!(
+                                "\t{} = eq {}, 0\n",
+                                tem_syms.get_new_sym(),
+                                tem_syms.find_sym(unary_sym - 1).unwrap()
+                            );
                         }
-                    };
+                    }
+                }
+
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum MulExp {
+    UnaryExp(Box<UnaryExp>),
+    Exp((Box<MulExp>, MulOp, Box<UnaryExp>)),
+}
+
+impl DumpIR for MulExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::UnaryExp(unary_exp) => (*unary_exp).dump_ir(tem_syms),
+            Self::Exp((mul_exp, mul_op, unary_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let mul_exp_ir: String = (*mul_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let unary_exp_ir: String = (*unary_exp).dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = mul_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &mul_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = unary_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &unary_exp_ir.to_string();
+                }
+
+                match *mul_op {
+                    MulOp::Mul => {
+                        ir += &format!(
+                            "\t{} = mul {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    MulOp::Div => {
+                        ir += &format!(
+                            "\t{} = div {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    MulOp::Mod => {
+                        ir += &format!(
+                            "\t{} = mod {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
                 };
 
-                unary_ir
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum AddExp {
+    MulExp(Box<MulExp>),
+    Exp((Box<AddExp>, AddOp, Box<MulExp>)),
+}
+
+impl DumpIR for AddExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::MulExp(mul_exp) => (*mul_exp).dump_ir(tem_syms),
+            Self::Exp((add_exp, add_op, mul_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let add_exp_ir: String = (*add_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let mul_exp_ir: String = (*mul_exp).dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = add_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &add_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = mul_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &mul_exp_ir.to_string();
+                }
+
+                match *add_op {
+                    AddOp::Add => {
+                        ir += &format!(
+                            "\t{} = add {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    AddOp::Sub => {
+                        ir += &format!(
+                            "\t{} = sub {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                };
+
+                ir
             }
         }
     }
@@ -152,14 +298,27 @@ pub enum UnaryOp {
 }
 
 #[derive(Debug)]
+pub enum AddOp {
+    Add,
+    Sub,
+}
+
+#[derive(Debug)]
+pub enum MulOp {
+    Mul,
+    Div,
+    Mod,
+}
+
+#[derive(Debug)]
 pub struct Block {
     pub stmt: Stmt,
 }
 
 impl DumpIR for Block {
-    fn dump_ir(&self) -> String {
-        let stmt_ir: String = self.stmt.dump_ir();
-        let cnt = COUNT.load(Ordering::Relaxed);
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        let stmt_ir: String = self.stmt.dump_ir(tem_syms);
+        let cnt = tem_syms.count;
         if cnt == 0 {
             format!("\n%enter:\n\tret {}\n", stmt_ir)
         } else {
@@ -174,7 +333,7 @@ pub struct Stmt {
 }
 
 impl DumpIR for Stmt {
-    fn dump_ir(&self) -> String {
-        self.exp.dump_ir()
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        self.exp.dump_ir(tem_syms)
     }
 }

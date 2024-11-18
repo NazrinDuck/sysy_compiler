@@ -115,73 +115,6 @@ impl Reg {
     }
 }
 
-/*
-pub trait GetReg {
-    fn get_reg(&self, asm: &mut String) -> String;
-}
-
-struct ValueReg {
-    value_data: ValueData,
-    reg: Reg,
-}
-
-enum Reg {
-    Reg(String),
-    Imm(i32),
-    None,
-}
-
-static REG_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-impl ValueReg {
-    fn new(&self, value_data: ValueData) -> Self {
-        ValueReg {
-            value_data,
-            reg: Reg::None,
-        }
-    }
-
-    fn alloc_reg(&mut self, dfg: &DataFlowGraph) {
-        let cnt = REG_COUNT.load(Ordering::Relaxed);
-        match self.value_data.kind() {
-            ValueKind::Integer(int) => {
-                if int.value() == 0 {
-                    self.reg = Reg::Reg("x0".to_string());
-                } else {
-                    self.reg = Reg::Reg(format!("t{}", cnt));
-                    REG_COUNT.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            ValueKind::Binary(binary) => {
-                let mut lhs_vr: ValueReg = self.new(dfg.value(binary.lhs()).to_owned());
-                let mut rhs_vr: ValueReg = self.new(dfg.value(binary.rhs()).to_owned());
-                lhs_vr.alloc_reg(dfg);
-                rhs_vr.alloc_reg(dfg);
-                self.reg = Reg::Reg(format!("t{}", cnt));
-                REG_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
-            _ => (),
-        }
-    }
-}
-
-pub trait Reg {
-    const REG: &str;
-    fn get_reg(&self, asm: &mut String) -> String;
-    fn set_reg(&self, asm: &mut String) -> String;
-}
-impl Reg {
-    fn get_reg(&mut self) -> String {
-        self.count += 1;
-        match self.count {
-            0_u32..=6_u32 => format!("t{}", self.count),
-            7_u32..=14_u32 => format!("a{}", self.count - 7),
-            _ => unreachable!(),
-        }
-    }
-}
-*/
-
 impl DumpAsm for koopa::ir::Program {
     fn dump_asm(&self) -> String {
         let mut asm: String = String::new();
@@ -251,14 +184,14 @@ impl DumpAsm for koopa::ir::FunctionData {
                             ValueKind::Binary(_) => {
                                 lhs_reg = Reg::find_reg(&mut regs, binary.lhs()).unwrap();
                             }
-                            _ => (),
+                            _ => unreachable!(),
                         }
                         match rhs_data.kind() {
                             ValueKind::Integer(int) => {
                                 if int.value() == 0 {
                                     rhs_reg = "x0".to_string();
                                 } else {
-                                    rhs_reg = Reg::get_reg(&mut regs, binary.lhs()).unwrap();
+                                    rhs_reg = Reg::get_reg(&mut regs, binary.rhs()).unwrap();
                                     ret_asm.push_str(&format!(
                                         "\tli\t{rd}, {imm}\n",
                                         rd = rhs_reg,
@@ -269,7 +202,7 @@ impl DumpAsm for koopa::ir::FunctionData {
                             ValueKind::Binary(_) => {
                                 rhs_reg = Reg::find_reg(&mut regs, binary.rhs()).unwrap();
                             }
-                            _ => (),
+                            _ => unreachable!(),
                         }
                         match binary.op() {
                             koopa::ir::BinaryOp::Eq => {
@@ -288,7 +221,39 @@ impl DumpAsm for koopa::ir::FunctionData {
                                     rs2 = rhs_reg
                                 );
                             }
-                            _ => (),
+                            koopa::ir::BinaryOp::Add => {
+                                ret_asm += &format!(
+                                    "\tadd\t{rd}, {rs1}, {rs2}\n",
+                                    rd = self_reg,
+                                    rs1 = lhs_reg,
+                                    rs2 = rhs_reg
+                                );
+                            }
+                            koopa::ir::BinaryOp::Mul => {
+                                ret_asm += &format!(
+                                    "\tmul\t{rd}, {rs1}, {rs2}\n",
+                                    rd = self_reg,
+                                    rs1 = lhs_reg,
+                                    rs2 = rhs_reg
+                                );
+                            }
+                            koopa::ir::BinaryOp::Div => {
+                                ret_asm += &format!(
+                                    "\tdiv\t{rd}, {rs1}, {rs2}\n",
+                                    rd = self_reg,
+                                    rs1 = lhs_reg,
+                                    rs2 = rhs_reg
+                                );
+                            }
+                            koopa::ir::BinaryOp::Mod => {
+                                ret_asm += &format!(
+                                    "\trem\t{rd}, {rs1}, {rs2}\n",
+                                    rd = self_reg,
+                                    rs1 = lhs_reg,
+                                    rs2 = rhs_reg
+                                );
+                            }
+                            _ => unreachable!(),
                         }
                         Reg::free_reg(&mut regs, binary.lhs());
                         Reg::free_reg(&mut regs, binary.rhs());
