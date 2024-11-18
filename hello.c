@@ -1,5 +1,5 @@
 // sssss
-int main() { return 0; }
+int main() { return (-2 + !1) * (+1 - 2); }
 // ???
 /* ??? */
 /* ?
