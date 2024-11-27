@@ -93,12 +93,12 @@ impl DumpIR for PrimaryExp {
 
 #[derive(Debug)]
 pub struct Exp {
-    pub add_exp: AddExp,
+    pub lor_exp: LOrExp,
 }
 
 impl DumpIR for Exp {
     fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
-        self.add_exp.dump_ir(tem_syms)
+        self.lor_exp.dump_ir(tem_syms)
     }
 }
 
@@ -120,14 +120,13 @@ impl DumpIR for UnaryExp {
                 let mut ir: String;
 
                 if unary_sym == pre_sym {
-                    match *unary_op {
+                    match unary_op {
                         UnaryOp::Positive => {
                             ir = unary_exp_ir.to_string();
                         }
                         UnaryOp::Negative => {
                             ir =
-                                format!("\t{} = sub 0, {}\n", tem_syms.get_new_sym(), unary_exp_ir)
-                                    .to_string();
+                                format!("\t{} = sub 0, {}\n", tem_syms.get_new_sym(), unary_exp_ir);
                         }
                         UnaryOp::Not => {
                             ir = format!("\t{} = eq {}, 0\n", tem_syms.get_new_sym(), unary_exp_ir);
@@ -135,7 +134,7 @@ impl DumpIR for UnaryExp {
                     }
                 } else {
                     ir = unary_exp_ir.to_string();
-                    match *unary_op {
+                    match unary_op {
                         UnaryOp::Positive => (),
                         UnaryOp::Negative => {
                             ir += &format!(
@@ -196,7 +195,7 @@ impl DumpIR for MulExp {
                     ir += &unary_exp_ir.to_string();
                 }
 
-                match *mul_op {
+                match mul_op {
                     MulOp::Mul => {
                         ir += &format!(
                             "\t{} = mul {}, {}\n",
@@ -265,7 +264,7 @@ impl DumpIR for AddExp {
                     ir += &mul_exp_ir.to_string();
                 }
 
-                match *add_op {
+                match add_op {
                     AddOp::Add => {
                         ir += &format!(
                             "\t{} = add {}, {}\n",
@@ -283,11 +282,260 @@ impl DumpIR for AddExp {
                         );
                     }
                 };
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RelExp {
+    AddExp(AddExp),
+    Exp((Box<RelExp>, RelOp, AddExp)),
+}
+
+impl DumpIR for RelExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::AddExp(add_exp) => add_exp.dump_ir(tem_syms),
+            Self::Exp((rel_exp, rel_op, add_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let rel_exp_ir: String = (*rel_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let add_exp_ir: String = add_exp.dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = rel_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &rel_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = add_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &add_exp_ir.to_string();
+                }
+
+                match rel_op {
+                    RelOp::Gt => {
+                        ir += &format!(
+                            "\t{} = gt {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    RelOp::Lt => {
+                        ir += &format!(
+                            "\t{} = lt {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    RelOp::Ge => {
+                        ir += &format!(
+                            "\t{} = ge {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    RelOp::Le => {
+                        ir += &format!(
+                            "\t{} = le {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                };
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum EqExp {
+    RelExp(RelExp),
+    Exp((Box<EqExp>, EqOp, RelExp)),
+}
+
+impl DumpIR for EqExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::RelExp(rel_exp) => rel_exp.dump_ir(tem_syms),
+            Self::Exp((eq_exp, eq_op, rel_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let eq_exp_ir: String = (*eq_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let rel_exp_ir: String = rel_exp.dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = eq_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &eq_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = rel_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &rel_exp_ir.to_string();
+                }
+
+                match eq_op {
+                    EqOp::Eq => {
+                        ir += &format!(
+                            "\t{} = eq {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                    EqOp::NotEq => {
+                        ir += &format!(
+                            "\t{} = ne {}, {}\n",
+                            tem_syms.get_new_sym(),
+                            lhs_sym,
+                            rhs_sym
+                        );
+                    }
+                };
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum LAndExp {
+    EqExp(EqExp),
+    Exp((Box<LAndExp>, EqExp)),
+}
+
+impl DumpIR for LAndExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::EqExp(eq_exp) => eq_exp.dump_ir(tem_syms),
+            Self::Exp((land_exp, eq_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let land_exp_ir: String = (*land_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let eq_exp_ir: String = eq_exp.dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = land_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &land_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = eq_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &eq_exp_ir.to_string();
+                }
+
+                let tem_res = tem_syms.get_new_sym();
+                ir += &format!(
+                    "\t{tem_res} = mul {}, {}\n\t{} = ne {tem_res}, 0\n",
+                    lhs_sym,
+                    rhs_sym,
+                    tem_syms.get_new_sym(),
+                );
 
                 ir
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum LOrExp {
+    LAndExp(LAndExp),
+    Exp((Box<LOrExp>, LAndExp)),
+}
+
+impl DumpIR for LOrExp {
+    fn dump_ir(&self, tem_syms: &mut TemSyms) -> String {
+        match self {
+            Self::LAndExp(land_exp) => land_exp.dump_ir(tem_syms),
+            Self::Exp((lor_exp, land_exp)) => {
+                let pre_cnt = tem_syms.count;
+                let lor_exp_ir: String = (*lor_exp).dump_ir(tem_syms);
+                let lhs_cnt = tem_syms.count;
+                let land_exp_ir: String = land_exp.dump_ir(tem_syms);
+                let rhs_cnt = tem_syms.count;
+
+                let mut ir: String = String::new();
+
+                let lhs_sym: String;
+                let rhs_sym: String;
+
+                if pre_cnt == lhs_cnt {
+                    lhs_sym = lor_exp_ir;
+                } else {
+                    lhs_sym = tem_syms.find_sym(lhs_cnt - 1).unwrap();
+                    ir += &lor_exp_ir.to_string();
+                }
+
+                if lhs_cnt == rhs_cnt {
+                    rhs_sym = land_exp_ir;
+                } else {
+                    rhs_sym = tem_syms.find_sym(rhs_cnt - 1).unwrap();
+                    ir += &land_exp_ir.to_string();
+                }
+
+                let tem_res = tem_syms.get_new_sym();
+                ir += &format!(
+                    "\t{tem_res} = or {}, {}\n\t{} = ne {tem_res}, 0\n",
+                    lhs_sym,
+                    rhs_sym,
+                    tem_syms.get_new_sym(),
+                );
+
+                ir
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RelOp {
+    Gt,
+    Lt,
+    Ge,
+    Le,
+}
+
+#[derive(Debug)]
+pub enum EqOp {
+    Eq,
+    NotEq,
 }
 
 #[derive(Debug)]

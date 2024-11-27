@@ -1,4 +1,4 @@
-use asm::DumpAsm;
+use asm::{DumpAsm, RegAllocator};
 use ast::{DumpIR, TemSyms};
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
         "-riscv" => {
             let driver = koopa::front::Driver::from(ast.clone());
             let program = driver.generate_program().unwrap();
-            let asm: String = program.dump_asm();
+            let asm: String = program.dump_asm(&mut RegAllocator::new());
 
             generate_file(out_file, asm.clone()).unwrap();
             println!("\x1b[01;36masm:\n{}\x1b[0m", asm);
