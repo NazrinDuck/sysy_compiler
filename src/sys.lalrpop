@@ -1,4 +1,5 @@
-use crate::ast::{CompUnit, Block, FuncDef, FuncType, Stmt, Exp, PrimaryExp, UnaryExp, UnaryOp, AddExp, AddOp, MulExp, MulOp};
+use crate::ast::{CompUnit, Block, FuncDef, FuncType, Stmt, Exp, PrimaryExp, UnaryExp, UnaryOp, AddExp, AddOp, MulExp, MulOp, RelExp, RelOp, EqExp, EqOp, LAndExp, LOrExp};
+use crate::ast::{Decl, ConstDecl, BType, ConstDef, ConstInitVal, ConstExp, LVal, BlockItem};
 //use crate::ast::*;
 
 // lalrpop 里的约定
@@ -19,24 +20,57 @@ match {
 //
 pub CompUnit: CompUnit = <func_def: FuncDef> => CompUnit { <> };
 
+Decl: Decl = <const_decl: ConstDecl> => Decl::ConstDecl( <> );
+
+ConstDecl: ConstDecl = {
+  "const" <b_type: BType> <mut const_defs: (<ConstDef> ",")*> <const_def: ConstDef?> ";" => match const_def {
+    None => ConstDecl{ b_type, const_defs },
+    Some(const_def) => {
+      const_defs.push(const_def);
+      ConstDecl{ b_type, const_defs }
+    }
+  }
+};
+
+BType: BType = "int" => BType::Int;
+
+ConstDef: ConstDef = <ident: Ident> "=" <const_init_val: ConstInitVal> => {
+  ConstDef {
+    ident,
+    const_init_val,
+  }
+};
+
+ConstInitVal: ConstInitVal = <const_exp: ConstExp> => ConstInitVal { <> };
+
 FuncDef: FuncDef = {
   <func_type: FuncType> <ident: Ident> "(" ")" <block: Block> => {
     FuncDef { <> }
   }
-}
+};
 
 FuncType: FuncType = "int" => FuncType::Int;
 
-Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
+Block: Block = "{" <block_items: BlockItem*> "}" => Block { <> };
+
+BlockItem: BlockItem = {
+  <decl: Decl> => BlockItem::Decl( <> ),
+  <stmt: Stmt> => BlockItem::Stmt( <> ),
+};
 
 Stmt: Stmt = "return" <exp: Exp> ";" => Stmt { <> };
 
-Exp: Exp = <add_exp: AddExp> => Exp { <> };
+Exp: Exp = <lor_exp: LOrExp> => Exp { <> };
+
+LVal: LVal = <ident: Ident> => LVal { <> };
 
 PrimaryExp: PrimaryExp = {
   "(" <exp: Exp> ")" => PrimaryExp::Exp(Box::new( <> )),
+  <lval: LVal> => PrimaryExp::LVal( <> ),
   <num: Number> => PrimaryExp::Number( <> ),
 };
+
+ConstExp: ConstExp = <exp: Exp> => ConstExp { <> };
 
 UnaryExp: UnaryExp = {
   <primary_exp: PrimaryExp> => UnaryExp::PrimaryExp(Box::new( <> )),
@@ -52,6 +86,38 @@ AddExp: AddExp = {
   <mul_exp: MulExp> => AddExp::MulExp(Box::new( <> )),
   <add_exp: AddExp> <add_op: AddOp> <mul_exp: MulExp> => AddExp::Exp((Box::new(add_exp), add_op, Box::new(mul_exp))),
 };
+
+RelExp: RelExp = {
+  <add_exp: AddExp> => RelExp::AddExp( <> ),
+  <rel_exp: RelExp> <rel_op: RelOp> <add_exp: AddExp> => RelExp::Exp((Box::new(rel_exp), rel_op, add_exp)),
+}
+
+EqExp: EqExp = {
+  <rel_exp: RelExp> => EqExp::RelExp( <> ),
+  <eq_exp: EqExp> <eq_op: EqOp> <rel_exp: RelExp> => EqExp::Exp((Box::new(eq_exp), eq_op, rel_exp)),
+}
+
+LAndExp: LAndExp = {
+  <eq_exp: EqExp> => LAndExp::EqExp( <> ),
+  <land_exp: LAndExp> "&&" <eq_exp: EqExp> => LAndExp::Exp((Box::new(land_exp), eq_exp)),
+}
+
+LOrExp: LOrExp = {
+  <land_exp: LAndExp> => LOrExp::LAndExp( <> ),
+  <lor_exp: LOrExp> "||" <land_exp: LAndExp> => LOrExp::Exp((Box::new(lor_exp), land_exp)),
+}
+
+RelOp: RelOp = {
+  ">" => RelOp::Gt,
+  "<" => RelOp::Lt,
+  ">=" => RelOp::Ge,
+  "<=" => RelOp::Le,
+}
+
+EqOp: EqOp = {
+  "==" => EqOp::Eq,
+  "!=" => EqOp::NotEq,
+}
 
 UnaryOp: UnaryOp = {
   "+" => UnaryOp::Positive,

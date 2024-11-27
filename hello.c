@@ -1,5 +1,8 @@
 // sssss
-int main() { return 9 > 10; }
+int main() {
+  const int a = 9 + 10;
+  return a;
+}
 // int main() { return (-1 + !1) * (+1 - 2); }
 //  ???
 /* ??? */

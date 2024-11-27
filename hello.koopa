@@ -1,6 +1,4 @@
 fun @main(): i32 {
 %enter:
-	%0 = mul 2, 4
-	%1 = ne %0, 0
-	ret %1
+	ret 19
 }
