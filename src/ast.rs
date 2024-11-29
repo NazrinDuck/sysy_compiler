@@ -12,22 +12,42 @@ pub trait DumpVal {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32;
 }
 
-struct SymMaps {
+#[derive(Debug, Clone)]
+enum Sym {
+    ConstInt(i32),
+    ConstStr(String),
+    VarInt((String, Option<i32>)),
+}
+
+/*
+struct ConstSyms {
     int_map: HashMap<String, i32>,
     str_map: HashMap<String, String>,
 }
 
-impl SymMaps {
+impl ConstSyms {
     fn new() -> Self {
-        SymMaps {
+        ConstSyms {
             int_map: HashMap::new(),
             str_map: HashMap::new(),
         }
     }
 }
 
+struct VarSyms {
+    ident: Vec<String>,
+    str_map: HashMap<String, String>,
+}
+
+impl Sym {}
+*/
+
 pub struct SymTable {
-    symbols: SymMaps,
+    /*
+    var_symbols: VarSyms,
+    const_symbols: ConstSyms,
+    */
+    symbols: HashMap<String, Sym>,
     tem_symbols: Vec<(String, bool, Option<u32>)>,
     count: u32,
 }
@@ -35,7 +55,7 @@ pub struct SymTable {
 impl SymTable {
     pub fn new() -> Self {
         SymTable {
-            symbols: SymMaps::new(),
+            symbols: HashMap::new(),
             tem_symbols: Vec::new(),
             count: 0,
         }
@@ -75,6 +95,7 @@ impl DumpIR for CompUnit {
 #[derive(Debug)]
 pub enum Decl {
     ConstDecl(ConstDecl),
+    VarDecl(VarDecl),
 }
 
 impl DumpIR for Decl {
@@ -83,6 +104,10 @@ impl DumpIR for Decl {
             Decl::ConstDecl(const_decl) => {
                 const_decl.parse_sym(sym_table);
                 "".to_string()
+            }
+            Decl::VarDecl(var_decl) => {
+                var_decl.parse_sym(sym_table);
+                var_decl.dump_ir(sym_table)
             }
         }
     }
@@ -102,10 +127,8 @@ impl ParseSym for ConstDecl {
                     let val = const_def.const_init_val.dump_val(sym_table);
                     sym_table
                         .symbols
-                        .int_map
-                        .insert(const_def.ident.clone(), val);
+                        .insert(const_def.ident.clone(), Sym::ConstInt(val));
                 }
-                _ => (),
             };
         }
     }
@@ -131,6 +154,90 @@ impl DumpVal for ConstInitVal {
 #[derive(Debug)]
 pub struct ConstInitVal {
     pub const_exp: ConstExp,
+}
+
+#[derive(Debug)]
+pub struct VarDecl {
+    pub b_type: BType,
+    pub var_defs: Vec<VarDef>,
+}
+
+impl ParseSym for VarDecl {
+    fn parse_sym(&self, sym_table: &mut SymTable) {
+        for var_def in &self.var_defs {
+            let ident: String = format!("@{}", var_def.ident);
+            match self.b_type {
+                BType::Int => match &var_def.init_val {
+                    Some(init_val) => {
+                        let val = init_val.dump_val(sym_table);
+                        sym_table
+                            .symbols
+                            .insert(var_def.ident.clone(), Sym::VarInt((ident, Some(val))));
+                    }
+                    None => {
+                        sym_table
+                            .symbols
+                            .insert(var_def.ident.clone(), Sym::VarInt((ident, None)));
+                    }
+                },
+            };
+        }
+    }
+}
+
+impl DumpIR for VarDecl {
+    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+        let sym_type: String = match self.b_type {
+            BType::Int => "i32".to_string(),
+        };
+        let mut ir: String = String::new();
+        for var_def in &self.var_defs {
+            let ident = match &sym_table.symbols[&var_def.ident] {
+                Sym::VarInt((ident, _)) => ident.clone(),
+                _ => panic!("symbol don't match"),
+            };
+            ir += &format!("\t{} = alloc {}\n", ident, sym_type);
+            if let Some(init_val) = &var_def.init_val {
+                let pre_cnt = sym_table.count;
+                let init_val_ir = init_val.dump_ir(sym_table);
+                let var_cnt = sym_table.count;
+
+                if pre_cnt == var_cnt {
+                    ir += &format!("\tstore {}, {}\n", init_val_ir, ident);
+                } else {
+                    ir += &format!(
+                        "{}\tstore {}, {}\n",
+                        init_val_ir,
+                        sym_table.find_sym(var_cnt - 1).unwrap(),
+                        ident
+                    );
+                }
+            }
+        }
+        ir
+    }
+}
+
+#[derive(Debug)]
+pub struct VarDef {
+    pub ident: String,
+    pub init_val: Option<InitVal>,
+}
+
+#[derive(Debug)]
+pub struct InitVal {
+    pub exp: Exp,
+}
+impl DumpIR for InitVal {
+    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+        self.exp.dump_ir(sym_table)
+    }
+}
+
+impl DumpVal for InitVal {
+    fn dump_val(&self, sym_table: &mut SymTable) -> i32 {
+        self.exp.dump_val(sym_table)
+    }
 }
 
 #[derive(Debug)]
@@ -191,7 +298,16 @@ impl DumpIR for PrimaryExp {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
         match self {
             PrimaryExp::Exp(exp) => exp.dump_ir(sym_table),
-            PrimaryExp::LVal(lval) => sym_table.symbols.int_map[&lval.ident].to_string(),
+            PrimaryExp::LVal(lval) => {
+                let sym = sym_table.symbols[&lval.ident].clone();
+                match sym {
+                    Sym::ConstInt(val) => val.to_string(),
+                    Sym::ConstStr(str) => str.clone(),
+                    Sym::VarInt((ident, _)) => {
+                        format!("\t{} = load {}\n", sym_table.get_new_sym(), ident.clone())
+                    }
+                }
+            }
             PrimaryExp::Number(num) => num.to_string(),
         }
     }
@@ -201,7 +317,11 @@ impl DumpVal for PrimaryExp {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32 {
         match self {
             PrimaryExp::Exp(exp) => exp.dump_val(sym_table),
-            PrimaryExp::LVal(lval) => sym_table.symbols.int_map[&lval.ident],
+            PrimaryExp::LVal(lval) => match &sym_table.symbols[&lval.ident] {
+                Sym::ConstInt(val) => *val,
+                Sym::ConstStr(_) => 0,
+                Sym::VarInt((_, val)) => val.unwrap_or(0),
+            },
             PrimaryExp::Number(num) => *num,
         }
     }
@@ -235,13 +355,13 @@ impl DumpIR for UnaryExp {
         match self {
             Self::PrimaryExp(primary_exp) => primary_exp.dump_ir(sym_table),
             Self::Exp((unary_op, unary_exp)) => {
-                let pre_sym = sym_table.count;
+                let pre_cnt = sym_table.count;
                 let unary_exp_ir: String = unary_exp.dump_ir(sym_table);
-                let unary_sym = sym_table.count;
+                let unary_cnt = sym_table.count;
 
                 let mut ir: String;
 
-                if unary_sym == pre_sym {
+                if unary_cnt == pre_cnt {
                     match unary_op {
                         UnaryOp::Positive => {
                             ir = unary_exp_ir.to_string();
@@ -266,14 +386,14 @@ impl DumpIR for UnaryExp {
                             ir += &format!(
                                 "\t{} = sub 0, {}\n",
                                 sym_table.get_new_sym(),
-                                sym_table.find_sym(unary_sym - 1).unwrap()
+                                sym_table.find_sym(unary_cnt - 1).unwrap()
                             );
                         }
                         UnaryOp::Not => {
                             ir += &format!(
                                 "\t{} = eq {}, 0\n",
                                 sym_table.get_new_sym(),
-                                sym_table.find_sym(unary_sym - 1).unwrap()
+                                sym_table.find_sym(unary_cnt - 1).unwrap()
                             );
                         }
                     }
@@ -796,7 +916,7 @@ pub struct Block {
 
 impl DumpIR for Block {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        let mut ir: String = String::new();
+        let mut ir: String = String::from("\n%entry:\n");
         for block_item in &self.block_items {
             ir += &block_item.dump_ir(sym_table);
         }
@@ -812,28 +932,63 @@ pub enum BlockItem {
 
 impl DumpIR for BlockItem {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+        let mut ir: String = String::new();
         match self {
-            BlockItem::Decl(decl) => decl.dump_ir(sym_table),
-            BlockItem::Stmt(stmt) => {
-                let stmt_ir: String = stmt.dump_ir(sym_table);
-                let cnt = sym_table.count;
-                if cnt == 0 {
-                    format!("\n%enter:\n\tret {}\n", stmt_ir)
-                } else {
-                    format!("\n%enter:\n{}\tret %{}\n", stmt_ir, cnt - 1)
-                }
+            BlockItem::Decl(decl) => {
+                ir += &decl.dump_ir(sym_table);
             }
-        }
+            BlockItem::Stmt(stmt) => {
+                ir += &stmt.dump_ir(sym_table);
+            }
+        };
+        ir
     }
 }
 
 #[derive(Debug)]
-pub struct Stmt {
-    pub exp: Exp,
+pub enum Stmt {
+    SetLVal(LVal, Exp),
+    Ret(Exp),
 }
 
 impl DumpIR for Stmt {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        self.exp.dump_ir(sym_table)
+        match self {
+            Stmt::SetLVal(lval, exp) => {
+                let mut ir: String = String::new();
+                let ident = match &sym_table.symbols[&lval.ident] {
+                    Sym::VarInt((ident, _)) => ident.clone(),
+                    _ => panic!("symbol don't match"),
+                };
+
+                let pre_cnt = sym_table.count;
+                let exp_ir = exp.dump_ir(sym_table);
+                let stmt_cnt = sym_table.count;
+
+                if pre_cnt == stmt_cnt {
+                    ir += &format!("\tstore {}, {}\n", exp_ir, ident);
+                } else {
+                    ir += &format!(
+                        "{}\tstore {}, {}\n",
+                        exp_ir,
+                        sym_table.find_sym(stmt_cnt - 1).unwrap(),
+                        ident
+                    );
+                }
+                ir
+            }
+            Stmt::Ret(exp) => {
+                let mut ir: String = String::new();
+                let exp_ir: String = exp.dump_ir(sym_table);
+                let cnt = sym_table.count;
+                if cnt == 0 {
+                    ir += &format!("\tret {}\n", exp_ir)
+                } else {
+                    ir += &format!("{}\tret %{}\n", exp_ir, cnt - 1)
+                };
+                ir
+            }
+            _ => "".to_string(),
+        }
     }
 }
