@@ -979,12 +979,13 @@ impl DumpIR for Stmt {
             }
             Stmt::Ret(exp) => {
                 let mut ir: String = String::new();
+                let pre_cnt = sym_table.count;
                 let exp_ir: String = exp.dump_ir(sym_table);
-                let cnt = sym_table.count;
-                if cnt == 0 {
+                let ret_cnt = sym_table.count;
+                if pre_cnt == ret_cnt {
                     ir += &format!("\tret {}\n", exp_ir)
                 } else {
-                    ir += &format!("{}\tret %{}\n", exp_ir, cnt - 1)
+                    ir += &format!("{}\tret %{}\n", exp_ir, ret_cnt - 1)
                 };
                 ir
             }
