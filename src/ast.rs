@@ -19,34 +19,7 @@ enum Sym {
     VarInt((String, Option<i32>)),
 }
 
-/*
-struct ConstSyms {
-    int_map: HashMap<String, i32>,
-    str_map: HashMap<String, String>,
-}
-
-impl ConstSyms {
-    fn new() -> Self {
-        ConstSyms {
-            int_map: HashMap::new(),
-            str_map: HashMap::new(),
-        }
-    }
-}
-
-struct VarSyms {
-    ident: Vec<String>,
-    str_map: HashMap<String, String>,
-}
-
-impl Sym {}
-*/
-
 pub struct SymTable {
-    /*
-    var_symbols: VarSyms,
-    const_symbols: ConstSyms,
-    */
     symbols: HashMap<String, Sym>,
     tem_symbols: Vec<(String, bool, Option<u32>)>,
     count: u32,
