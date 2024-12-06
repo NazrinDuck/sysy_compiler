@@ -1,7 +1,10 @@
 // sssss
 int main() {
-  int x = 1, y = 2, z = 3;
-  return x + y + z;
+  int a = 1;
+  {
+    a = a + 2;
+  }
+  return a;
 }
 // int main() { return (-1 + !1) * (+1 - 2); }
 //  ???

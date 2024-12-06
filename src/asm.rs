@@ -257,9 +257,9 @@ impl DumpAsm for Value {
                 asm.push_str(&ret_asm);
                 let space: u32 = reg_allocator.stack_frame.space;
                 if space <= 2048 && space > 0 {
-                    asm += &format!("\taddi\tsp, sp, -{}\n", space);
+                    asm += &format!("\taddi\tsp, sp, {}\n", space);
                 } else if space != 0 {
-                    asm += &format!("\tli\tt0, -{}\n\taddi\tsp, sp, t0\n", space);
+                    asm += &format!("\tli\tt0, {}\n\taddi\tsp, sp, t0\n", space);
                 }
                 asm += "\tret\n";
             }

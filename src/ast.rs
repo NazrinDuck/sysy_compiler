@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub trait DumpIR {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String;
@@ -19,22 +21,58 @@ enum Sym {
     VarInt((String, Option<i32>)),
 }
 
-pub struct SymTable {
+#[derive(Debug)]
+struct SymMap {
     symbols: HashMap<String, Sym>,
+    parent: Option<Rc<RefCell<SymMap>>>,
+    depth: u32,
+}
+impl SymMap {
+    fn new() -> Self {
+        SymMap {
+            symbols: HashMap::new(),
+            parent: None,
+            depth: 0,
+        }
+    }
+    fn insert(&mut self, ident: String, sym: Sym) {
+        self.symbols.insert(ident.clone(), sym);
+    }
+    fn search(&self, ident: String) -> Result<Sym, String> {
+        match self.symbols.get(&ident) {
+            None => match &self.parent {
+                None => Err(format!("can't find symbol: {}!", ident)),
+                Some(parent) => parent.borrow().search(ident),
+            },
+            Some(sym) => match sym {
+                Sym::VarInt((id, var)) => {
+                    let var_int = Sym::VarInt((format!("{}_{}", id, self.depth), *var));
+                    Ok(var_int)
+                }
+                _ => Ok(sym.clone()),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SymTable {
+    curr_map: Rc<RefCell<SymMap>>,
     tem_symbols: Vec<(String, bool, Option<u32>)>,
     count: u32,
 }
 
 impl SymTable {
     pub fn new() -> Self {
+        let rc_sym_map = Rc::new(RefCell::new(SymMap::new()));
         SymTable {
-            symbols: HashMap::new(),
+            curr_map: Rc::clone(&rc_sym_map),
             tem_symbols: Vec::new(),
             count: 0,
         }
     }
 
-    fn get_new_sym(&mut self) -> String {
+    fn get_new_tsym(&mut self) -> String {
         let symbol: String = format!("%{}", self.count);
         self.tem_symbols
             .push((symbol.clone(), true, Some(self.count)));
@@ -42,7 +80,7 @@ impl SymTable {
         symbol
     }
 
-    fn find_sym(&self, val: u32) -> Result<String, String> {
+    fn find_tsym(&self, val: u32) -> Result<String, String> {
         for sym in self.tem_symbols.clone() {
             if let Some(sym_val) = sym.2 {
                 if sym_val == val && sym.1 {
@@ -51,6 +89,31 @@ impl SymTable {
             }
         }
         Err(format!("can't find fitable temporary symbols: {}", val).to_string())
+    }
+
+    fn insert_sym(&mut self, ident: String, sym: Sym) {
+        self.curr_map.borrow_mut().insert(ident, sym);
+    }
+    fn search_sym(&mut self, ident: String) -> Sym {
+        match self.curr_map.borrow().search(ident) {
+            Ok(sym) => sym,
+            Err(e) => panic!("[Error] {}", e),
+        }
+    }
+    fn add_sym_map(&mut self) {
+        let new_sym_map = Rc::new(RefCell::new(SymMap::new()));
+        new_sym_map.borrow_mut().parent = Some(Rc::clone(&self.curr_map));
+        new_sym_map.borrow_mut().depth = self.curr_map.borrow().depth + 1;
+        self.curr_map = Rc::clone(&new_sym_map);
+    }
+    fn delete_sym_map(&mut self) {
+        let curr_map = Rc::clone(&self.curr_map);
+        match &curr_map.borrow().parent {
+            None => panic!("can't find parent symbol map!"),
+            Some(parent) => {
+                self.curr_map = Rc::clone(parent);
+            }
+        };
     }
 }
 
@@ -76,7 +139,7 @@ impl DumpIR for Decl {
         match self {
             Decl::ConstDecl(const_decl) => {
                 const_decl.parse_sym(sym_table);
-                "".to_string()
+                String::new()
             }
             Decl::VarDecl(var_decl) => {
                 var_decl.parse_sym(sym_table);
@@ -98,9 +161,7 @@ impl ParseSym for ConstDecl {
             match self.b_type {
                 BType::Int => {
                     let val = const_def.const_init_val.dump_val(sym_table);
-                    sym_table
-                        .symbols
-                        .insert(const_def.ident.clone(), Sym::ConstInt(val));
+                    sym_table.insert_sym(const_def.ident.clone(), Sym::ConstInt(val));
                 }
             };
         }
@@ -144,13 +205,10 @@ impl ParseSym for VarDecl {
                     Some(init_val) => {
                         let val = init_val.dump_val(sym_table);
                         sym_table
-                            .symbols
-                            .insert(var_def.ident.clone(), Sym::VarInt((ident, Some(val))));
+                            .insert_sym(var_def.ident.clone(), Sym::VarInt((ident, Some(val))));
                     }
                     None => {
-                        sym_table
-                            .symbols
-                            .insert(var_def.ident.clone(), Sym::VarInt((ident, None)));
+                        sym_table.insert_sym(var_def.ident.clone(), Sym::VarInt((ident, None)));
                     }
                 },
             };
@@ -165,9 +223,9 @@ impl DumpIR for VarDecl {
         };
         let mut ir: String = String::new();
         for var_def in &self.var_defs {
-            let ident = match &sym_table.symbols[&var_def.ident] {
+            let ident = match sym_table.search_sym(var_def.ident.clone()) {
                 Sym::VarInt((ident, _)) => ident.clone(),
-                _ => panic!("symbol don't match"),
+                _ => panic!("symbol has already defined!"),
             };
             ir += &format!("\t{} = alloc {}\n", ident, sym_type);
             if let Some(init_val) = &var_def.init_val {
@@ -181,7 +239,7 @@ impl DumpIR for VarDecl {
                     ir += &format!(
                         "{}\tstore {}, {}\n",
                         init_val_ir,
-                        sym_table.find_sym(var_cnt - 1).unwrap(),
+                        sym_table.find_tsym(var_cnt - 1).unwrap(),
                         ident
                     );
                 }
@@ -234,7 +292,7 @@ pub struct FuncDef {
 impl DumpIR for FuncDef {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
         format!(
-            "fun @{ident}(): {func_type} {{{block}}}",
+            "fun @{ident}(): {func_type} {{\n%entry:\n{block}}}",
             ident = self.ident,
             func_type = self.func_type.dump_ir(sym_table),
             block = self.block.dump_ir(sym_table)
@@ -272,12 +330,12 @@ impl DumpIR for PrimaryExp {
         match self {
             PrimaryExp::Exp(exp) => exp.dump_ir(sym_table),
             PrimaryExp::LVal(lval) => {
-                let sym = sym_table.symbols[&lval.ident].clone();
+                let sym = sym_table.search_sym(lval.ident.clone());
                 match sym {
                     Sym::ConstInt(val) => val.to_string(),
                     Sym::ConstStr(str) => str.clone(),
                     Sym::VarInt((ident, _)) => {
-                        format!("\t{} = load {}\n", sym_table.get_new_sym(), ident.clone())
+                        format!("\t{} = load {}\n", sym_table.get_new_tsym(), ident.clone())
                     }
                 }
             }
@@ -290,8 +348,8 @@ impl DumpVal for PrimaryExp {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32 {
         match self {
             PrimaryExp::Exp(exp) => exp.dump_val(sym_table),
-            PrimaryExp::LVal(lval) => match &sym_table.symbols[&lval.ident] {
-                Sym::ConstInt(val) => *val,
+            PrimaryExp::LVal(lval) => match sym_table.search_sym(lval.ident.clone()) {
+                Sym::ConstInt(val) => val,
                 Sym::ConstStr(_) => 0,
                 Sym::VarInt((_, val)) => val.unwrap_or(0),
             },
@@ -342,13 +400,16 @@ impl DumpIR for UnaryExp {
                         UnaryOp::Negative => {
                             ir = format!(
                                 "\t{} = sub 0, {}\n",
-                                sym_table.get_new_sym(),
+                                sym_table.get_new_tsym(),
                                 unary_exp_ir
                             );
                         }
                         UnaryOp::Not => {
-                            ir =
-                                format!("\t{} = eq {}, 0\n", sym_table.get_new_sym(), unary_exp_ir);
+                            ir = format!(
+                                "\t{} = eq {}, 0\n",
+                                sym_table.get_new_tsym(),
+                                unary_exp_ir
+                            );
                         }
                     }
                 } else {
@@ -358,15 +419,15 @@ impl DumpIR for UnaryExp {
                         UnaryOp::Negative => {
                             ir += &format!(
                                 "\t{} = sub 0, {}\n",
-                                sym_table.get_new_sym(),
-                                sym_table.find_sym(unary_cnt - 1).unwrap()
+                                sym_table.get_new_tsym(),
+                                sym_table.find_tsym(unary_cnt - 1).unwrap()
                             );
                         }
                         UnaryOp::Not => {
                             ir += &format!(
                                 "\t{} = eq {}, 0\n",
-                                sym_table.get_new_sym(),
-                                sym_table.find_sym(unary_cnt - 1).unwrap()
+                                sym_table.get_new_tsym(),
+                                sym_table.find_tsym(unary_cnt - 1).unwrap()
                             );
                         }
                     }
@@ -419,14 +480,14 @@ impl DumpIR for MulExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = mul_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &mul_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = unary_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &unary_exp_ir.to_string();
                 }
 
@@ -434,7 +495,7 @@ impl DumpIR for MulExp {
                     MulOp::Mul => {
                         ir += &format!(
                             "\t{} = mul {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -442,7 +503,7 @@ impl DumpIR for MulExp {
                     MulOp::Div => {
                         ir += &format!(
                             "\t{} = div {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -450,7 +511,7 @@ impl DumpIR for MulExp {
                     MulOp::Mod => {
                         ir += &format!(
                             "\t{} = mod {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -505,14 +566,14 @@ impl DumpIR for AddExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = add_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &add_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = mul_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &mul_exp_ir.to_string();
                 }
 
@@ -520,7 +581,7 @@ impl DumpIR for AddExp {
                     AddOp::Add => {
                         ir += &format!(
                             "\t{} = add {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -528,7 +589,7 @@ impl DumpIR for AddExp {
                     AddOp::Sub => {
                         ir += &format!(
                             "\t{} = sub {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -581,14 +642,14 @@ impl DumpIR for RelExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = rel_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &rel_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = add_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &add_exp_ir.to_string();
                 }
 
@@ -596,7 +657,7 @@ impl DumpIR for RelExp {
                     RelOp::Gt => {
                         ir += &format!(
                             "\t{} = gt {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -604,7 +665,7 @@ impl DumpIR for RelExp {
                     RelOp::Lt => {
                         ir += &format!(
                             "\t{} = lt {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -612,7 +673,7 @@ impl DumpIR for RelExp {
                     RelOp::Ge => {
                         ir += &format!(
                             "\t{} = ge {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -620,7 +681,7 @@ impl DumpIR for RelExp {
                     RelOp::Le => {
                         ir += &format!(
                             "\t{} = le {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -675,14 +736,14 @@ impl DumpIR for EqExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = eq_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &eq_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = rel_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &rel_exp_ir.to_string();
                 }
 
@@ -690,7 +751,7 @@ impl DumpIR for EqExp {
                     EqOp::Eq => {
                         ir += &format!(
                             "\t{} = eq {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -698,7 +759,7 @@ impl DumpIR for EqExp {
                     EqOp::NotEq => {
                         ir += &format!(
                             "\t{} = ne {}, {}\n",
-                            sym_table.get_new_sym(),
+                            sym_table.get_new_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -751,23 +812,23 @@ impl DumpIR for LAndExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = land_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &land_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = eq_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &eq_exp_ir.to_string();
                 }
 
-                let tem_res = sym_table.get_new_sym();
+                let tem_res = sym_table.get_new_tsym();
                 ir += &format!(
                     "\t{tem_res} = mul {}, {}\n\t{} = ne {tem_res}, 0\n",
                     lhs_sym,
                     rhs_sym,
-                    sym_table.get_new_sym(),
+                    sym_table.get_new_tsym(),
                 );
 
                 ir
@@ -812,23 +873,23 @@ impl DumpIR for LOrExp {
                 if pre_cnt == lhs_cnt {
                     lhs_sym = lor_exp_ir;
                 } else {
-                    lhs_sym = sym_table.find_sym(lhs_cnt - 1).unwrap();
+                    lhs_sym = sym_table.find_tsym(lhs_cnt - 1).unwrap();
                     ir += &lor_exp_ir.to_string();
                 }
 
                 if lhs_cnt == rhs_cnt {
                     rhs_sym = land_exp_ir;
                 } else {
-                    rhs_sym = sym_table.find_sym(rhs_cnt - 1).unwrap();
+                    rhs_sym = sym_table.find_tsym(rhs_cnt - 1).unwrap();
                     ir += &land_exp_ir.to_string();
                 }
 
-                let tem_res = sym_table.get_new_sym();
+                let tem_res = sym_table.get_new_tsym();
                 ir += &format!(
                     "\t{tem_res} = or {}, {}\n\t{} = ne {tem_res}, 0\n",
                     lhs_sym,
                     rhs_sym,
-                    sym_table.get_new_sym(),
+                    sym_table.get_new_tsym(),
                 );
 
                 ir
@@ -889,10 +950,12 @@ pub struct Block {
 
 impl DumpIR for Block {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        let mut ir: String = String::from("\n%entry:\n");
+        let mut ir: String = String::new();
+        sym_table.add_sym_map();
         for block_item in &self.block_items {
             ir += &block_item.dump_ir(sym_table);
         }
+        sym_table.delete_sym_map();
         ir
     }
 }
@@ -921,16 +984,26 @@ impl DumpIR for BlockItem {
 #[derive(Debug)]
 pub enum Stmt {
     SetLVal(LVal, Exp),
+    Exp(Option<Exp>),
+    Block(Box<Block>),
     Ret(Exp),
 }
 
 impl DumpIR for Stmt {
     fn dump_ir(&self, sym_table: &mut SymTable) -> String {
         match self {
+            Stmt::Block(block) => block.dump_ir(sym_table),
+            Stmt::Exp(exp) => {
+                if let Some(exp) = exp {
+                    return exp.dump_ir(sym_table);
+                }
+                String::new()
+            }
             Stmt::SetLVal(lval, exp) => {
                 let mut ir: String = String::new();
-                let ident = match &sym_table.symbols[&lval.ident] {
+                let ident = match sym_table.search_sym(lval.ident.clone()) {
                     Sym::VarInt((ident, _)) => ident.clone(),
+                    Sym::ConstInt(_) => panic!("attempt to change const value!"),
                     _ => panic!("symbol don't match"),
                 };
 
@@ -944,7 +1017,7 @@ impl DumpIR for Stmt {
                     ir += &format!(
                         "{}\tstore {}, {}\n",
                         exp_ir,
-                        sym_table.find_sym(stmt_cnt - 1).unwrap(),
+                        sym_table.find_tsym(stmt_cnt - 1).unwrap(),
                         ident
                     );
                 }
@@ -962,7 +1035,6 @@ impl DumpIR for Stmt {
                 };
                 ir
             }
-            _ => "".to_string(),
         }
     }
 }
