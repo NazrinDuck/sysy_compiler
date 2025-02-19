@@ -1,9 +1,9 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 pub trait DumpIR {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String;
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String;
 }
 
 pub trait ParseSym {
@@ -14,11 +14,13 @@ pub trait DumpVal {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32;
 }
 
+type VarID = String;
+
 #[derive(Debug, Clone)]
 enum Sym {
     ConstInt(i32),
     ConstStr(String),
-    VarInt((String, Option<i32>)),
+    VarInt((VarID, Option<i32>)),
 }
 
 #[derive(Debug)]
@@ -26,6 +28,7 @@ struct SymMap {
     symbols: HashMap<String, Sym>,
     parent: Option<Rc<RefCell<SymMap>>>,
     depth: u32,
+    cnt: u32,
 }
 impl SymMap {
     fn new() -> Self {
@@ -33,11 +36,20 @@ impl SymMap {
             symbols: HashMap::new(),
             parent: None,
             depth: 0,
+            cnt: 1,
         }
     }
+
     fn insert(&mut self, ident: String, sym: Sym) {
-        self.symbols.insert(ident.clone(), sym);
+        let sym_cnt: Sym = if let Sym::VarInt((var_id, var_val)) = sym {
+            Sym::VarInt((format!("{}_{}", var_id, self.cnt), var_val))
+        } else {
+            sym
+        };
+        self.symbols.insert(ident, sym_cnt);
+        self.cnt += 1;
     }
+
     fn search(&self, ident: String) -> Result<Sym, String> {
         match self.symbols.get(&ident) {
             None => match &self.parent {
@@ -60,6 +72,7 @@ pub struct SymTable {
     curr_map: Rc<RefCell<SymMap>>,
     tem_symbols: Vec<(String, bool, Option<u32>)>,
     count: u32,
+    block_cnt: u32,
 }
 
 impl SymTable {
@@ -69,10 +82,11 @@ impl SymTable {
             curr_map: Rc::clone(&rc_sym_map),
             tem_symbols: Vec::new(),
             count: 0,
+            block_cnt: 0,
         }
     }
 
-    fn get_new_tsym(&mut self) -> String {
+    fn get_tsym(&mut self) -> String {
         let symbol: String = format!("%{}", self.count);
         self.tem_symbols
             .push((symbol.clone(), true, Some(self.count)));
@@ -97,9 +111,10 @@ impl SymTable {
     fn search_sym(&mut self, ident: String) -> Sym {
         match self.curr_map.borrow().search(ident) {
             Ok(sym) => sym,
-            Err(e) => panic!("[Error] {}", e),
+            Err(e) => panic!("{}", e),
         }
     }
+
     fn add_sym_map(&mut self) {
         let new_sym_map = Rc::new(RefCell::new(SymMap::new()));
         new_sym_map.borrow_mut().parent = Some(Rc::clone(&self.curr_map));
@@ -115,6 +130,126 @@ impl SymTable {
             }
         };
     }
+    fn get_block_name(&mut self) -> String {
+        let name = format!("BR{}", self.block_cnt);
+        self.block_cnt += 1;
+        name
+    }
+}
+
+#[derive(Debug)]
+struct BaseBlock {
+    name: String,
+    is_end: bool,
+    ir: String,
+    next: Vec<String>,
+}
+// ir bond base_block is a good idea ithk
+
+impl BaseBlock {
+    fn new(name: String) -> Self {
+        BaseBlock {
+            name,
+            is_end: false,
+            ir: String::new(),
+            next: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BlockGraph {
+    map: HashMap<String, BaseBlock>,
+    entry: String,
+    curr_map: String,
+}
+
+impl BlockGraph {
+    pub fn new() -> Self {
+        BlockGraph {
+            map: HashMap::new(),
+            entry: String::new(),
+            curr_map: String::new(),
+        }
+    }
+
+    fn find_mut_block(&mut self, name: &String) -> &mut BaseBlock {
+        match self.map.get_mut(name) {
+            Some(base_block) => base_block,
+            None => panic!("the map is empty!"),
+        }
+    }
+
+    fn find_block(&self, name: &String) -> &BaseBlock {
+        match self.map.get(name) {
+            Some(base_block) => base_block,
+            None => panic!("the map is empty!"),
+        }
+    }
+
+    fn curr_block(&mut self) -> &mut BaseBlock {
+        let name: String = self.curr_map.clone();
+        self.find_mut_block(&name)
+    }
+
+    fn insert(&mut self, name: String) {
+        let new_base_block = BaseBlock::new(name.clone());
+
+        /*
+                if let Some(base_block) = self.map.get_mut(&self.curr_map) {
+                    base_block.next.push(name.clone());
+                }
+        */
+
+        self.curr_map = name.clone();
+        self.map.insert(name, new_base_block);
+    }
+
+    fn set_entry(&mut self, enrty: String) {
+        self.insert(enrty.clone());
+        self.entry = enrty;
+    }
+    fn end(&mut self, next: Option<String>) {
+        self.curr_block().is_end = true;
+
+        if let Some(next_name) = next {
+            self.insert(next_name);
+        }
+    }
+
+    fn is_end(&self) -> bool {
+        self.map.get(&self.curr_map).unwrap().is_end
+    }
+
+    fn insert_next(&mut self, next: String) {
+        self.curr_block().next.push(next);
+    }
+
+    fn insert_ir(&mut self, ir: &String) {
+        if !self.curr_block().is_end {
+            self.curr_block().ir += ir;
+        }
+    }
+
+    pub fn generate_ir(&self) -> String {
+        let mut queue: VecDeque<String> = VecDeque::new();
+        queue.push_back(self.entry.clone());
+        let mut set: HashSet<String> = HashSet::new();
+        let mut ir: String = String::new();
+        set.insert(self.entry.clone());
+
+        while !queue.is_empty() {
+            let name = queue.pop_front().unwrap();
+            ir += &format!("%{}:\n{}", name, self.find_block(&name).ir.clone());
+            for ele in self.map.get(&name).unwrap().next.clone() {
+                if !set.contains(&ele) {
+                    set.insert(ele.clone());
+                    queue.push_back(ele);
+                }
+            }
+        }
+        ir
+    }
 }
 
 #[derive(Debug)]
@@ -123,8 +258,10 @@ pub struct CompUnit {
 }
 
 impl DumpIR for CompUnit {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        self.func_def.dump_ir(sym_table)
+    /// Start function
+    /// All start here
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        self.func_def.dump_ir(sym_table, block_graph)
     }
 }
 
@@ -135,7 +272,7 @@ pub enum Decl {
 }
 
 impl DumpIR for Decl {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
             Decl::ConstDecl(const_decl) => {
                 const_decl.parse_sym(sym_table);
@@ -143,7 +280,10 @@ impl DumpIR for Decl {
             }
             Decl::VarDecl(var_decl) => {
                 var_decl.parse_sym(sym_table);
-                var_decl.dump_ir(sym_table)
+                let ir: String = var_decl.dump_ir(sym_table, block_graph);
+
+                block_graph.curr_block().ir += &ir;
+                ir
             }
         }
     }
@@ -217,7 +357,7 @@ impl ParseSym for VarDecl {
 }
 
 impl DumpIR for VarDecl {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         let sym_type: String = match self.b_type {
             BType::Int => "i32".to_string(),
         };
@@ -230,7 +370,7 @@ impl DumpIR for VarDecl {
             ir += &format!("\t{} = alloc {}\n", ident, sym_type);
             if let Some(init_val) = &var_def.init_val {
                 let pre_cnt = sym_table.count;
-                let init_val_ir = init_val.dump_ir(sym_table);
+                let init_val_ir = init_val.dump_ir(sym_table, block_graph);
                 let var_cnt = sym_table.count;
 
                 if pre_cnt == var_cnt {
@@ -260,8 +400,8 @@ pub struct InitVal {
     pub exp: Exp,
 }
 impl DumpIR for InitVal {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        self.exp.dump_ir(sym_table)
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        self.exp.dump_ir(sym_table, block_graph)
     }
 }
 
@@ -290,12 +430,15 @@ pub struct FuncDef {
 }
 
 impl DumpIR for FuncDef {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        block_graph.set_entry(String::from("entry"));
+        let ir = self.block.dump_ir(sym_table, block_graph);
         format!(
-            "fun @{ident}(): {func_type} {{\n%entry:\n{block}}}",
+            "fun @{ident}(): {func_type} {{\n{block}}}",
             ident = self.ident,
-            func_type = self.func_type.dump_ir(sym_table),
-            block = self.block.dump_ir(sym_table)
+            func_type = self.func_type.dump_ir(sym_table, block_graph),
+            //block = ir,
+            block = block_graph.generate_ir(),
         )
     }
 }
@@ -306,7 +449,7 @@ pub enum FuncType {
 }
 
 impl DumpIR for FuncType {
-    fn dump_ir(&self, _: &mut SymTable) -> String {
+    fn dump_ir(&self, _: &mut SymTable, _: &mut BlockGraph) -> String {
         match self {
             FuncType::Int => "i32".to_string(),
         }
@@ -326,16 +469,16 @@ pub enum PrimaryExp {
 }
 
 impl DumpIR for PrimaryExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            PrimaryExp::Exp(exp) => exp.dump_ir(sym_table),
+            PrimaryExp::Exp(exp) => exp.dump_ir(sym_table, block_graph),
             PrimaryExp::LVal(lval) => {
                 let sym = sym_table.search_sym(lval.ident.clone());
                 match sym {
                     Sym::ConstInt(val) => val.to_string(),
                     Sym::ConstStr(str) => str.clone(),
                     Sym::VarInt((ident, _)) => {
-                        format!("\t{} = load {}\n", sym_table.get_new_tsym(), ident.clone())
+                        format!("\t{} = load {}\n", sym_table.get_tsym(), ident.clone())
                     }
                 }
             }
@@ -364,8 +507,8 @@ pub struct Exp {
 }
 
 impl DumpIR for Exp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
-        self.lor_exp.dump_ir(sym_table)
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        self.lor_exp.dump_ir(sym_table, block_graph)
     }
 }
 
@@ -382,12 +525,12 @@ pub enum UnaryExp {
 }
 
 impl DumpIR for UnaryExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::PrimaryExp(primary_exp) => primary_exp.dump_ir(sym_table),
+            Self::PrimaryExp(primary_exp) => primary_exp.dump_ir(sym_table, block_graph),
             Self::Exp((unary_op, unary_exp)) => {
                 let pre_cnt = sym_table.count;
-                let unary_exp_ir: String = unary_exp.dump_ir(sym_table);
+                let unary_exp_ir: String = unary_exp.dump_ir(sym_table, block_graph);
                 let unary_cnt = sym_table.count;
 
                 let mut ir: String;
@@ -398,18 +541,10 @@ impl DumpIR for UnaryExp {
                             ir = unary_exp_ir.to_string();
                         }
                         UnaryOp::Negative => {
-                            ir = format!(
-                                "\t{} = sub 0, {}\n",
-                                sym_table.get_new_tsym(),
-                                unary_exp_ir
-                            );
+                            ir = format!("\t{} = sub 0, {}\n", sym_table.get_tsym(), unary_exp_ir);
                         }
                         UnaryOp::Not => {
-                            ir = format!(
-                                "\t{} = eq {}, 0\n",
-                                sym_table.get_new_tsym(),
-                                unary_exp_ir
-                            );
+                            ir = format!("\t{} = eq {}, 0\n", sym_table.get_tsym(), unary_exp_ir);
                         }
                     }
                 } else {
@@ -419,14 +554,14 @@ impl DumpIR for UnaryExp {
                         UnaryOp::Negative => {
                             ir += &format!(
                                 "\t{} = sub 0, {}\n",
-                                sym_table.get_new_tsym(),
+                                sym_table.get_tsym(),
                                 sym_table.find_tsym(unary_cnt - 1).unwrap()
                             );
                         }
                         UnaryOp::Not => {
                             ir += &format!(
                                 "\t{} = eq {}, 0\n",
-                                sym_table.get_new_tsym(),
+                                sym_table.get_tsym(),
                                 sym_table.find_tsym(unary_cnt - 1).unwrap()
                             );
                         }
@@ -462,14 +597,14 @@ pub enum MulExp {
 }
 
 impl DumpIR for MulExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::UnaryExp(unary_exp) => unary_exp.dump_ir(sym_table),
+            Self::UnaryExp(unary_exp) => unary_exp.dump_ir(sym_table, block_graph),
             Self::Exp((mul_exp, mul_op, unary_exp)) => {
                 let pre_cnt = sym_table.count;
-                let mul_exp_ir: String = mul_exp.dump_ir(sym_table);
+                let mul_exp_ir: String = mul_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let unary_exp_ir: String = unary_exp.dump_ir(sym_table);
+                let unary_exp_ir: String = unary_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -495,7 +630,7 @@ impl DumpIR for MulExp {
                     MulOp::Mul => {
                         ir += &format!(
                             "\t{} = mul {}, {}\n",
-                            sym_table.get_new_tsym(),
+                            sym_table.get_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -503,7 +638,7 @@ impl DumpIR for MulExp {
                     MulOp::Div => {
                         ir += &format!(
                             "\t{} = div {}, {}\n",
-                            sym_table.get_new_tsym(),
+                            sym_table.get_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -511,7 +646,7 @@ impl DumpIR for MulExp {
                     MulOp::Mod => {
                         ir += &format!(
                             "\t{} = mod {}, {}\n",
-                            sym_table.get_new_tsym(),
+                            sym_table.get_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -548,14 +683,14 @@ pub enum AddExp {
 }
 
 impl DumpIR for AddExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::MulExp(mul_exp) => (*mul_exp).dump_ir(sym_table),
+            Self::MulExp(mul_exp) => (*mul_exp).dump_ir(sym_table, block_graph),
             Self::Exp((add_exp, add_op, mul_exp)) => {
                 let pre_cnt = sym_table.count;
-                let add_exp_ir: String = add_exp.dump_ir(sym_table);
+                let add_exp_ir: String = add_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let mul_exp_ir: String = mul_exp.dump_ir(sym_table);
+                let mul_exp_ir: String = mul_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -581,7 +716,7 @@ impl DumpIR for AddExp {
                     AddOp::Add => {
                         ir += &format!(
                             "\t{} = add {}, {}\n",
-                            sym_table.get_new_tsym(),
+                            sym_table.get_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -589,7 +724,7 @@ impl DumpIR for AddExp {
                     AddOp::Sub => {
                         ir += &format!(
                             "\t{} = sub {}, {}\n",
-                            sym_table.get_new_tsym(),
+                            sym_table.get_tsym(),
                             lhs_sym,
                             rhs_sym
                         );
@@ -624,14 +759,14 @@ pub enum RelExp {
 }
 
 impl DumpIR for RelExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::AddExp(add_exp) => add_exp.dump_ir(sym_table),
+            Self::AddExp(add_exp) => add_exp.dump_ir(sym_table, block_graph),
             Self::Exp((rel_exp, rel_op, add_exp)) => {
                 let pre_cnt = sym_table.count;
-                let rel_exp_ir: String = rel_exp.dump_ir(sym_table);
+                let rel_exp_ir: String = rel_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let add_exp_ir: String = add_exp.dump_ir(sym_table);
+                let add_exp_ir: String = add_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -655,36 +790,20 @@ impl DumpIR for RelExp {
 
                 match rel_op {
                     RelOp::Gt => {
-                        ir += &format!(
-                            "\t{} = gt {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = gt {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                     RelOp::Lt => {
-                        ir += &format!(
-                            "\t{} = lt {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = lt {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                     RelOp::Ge => {
-                        ir += &format!(
-                            "\t{} = ge {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = ge {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                     RelOp::Le => {
-                        ir += &format!(
-                            "\t{} = le {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = le {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                 };
                 ir
@@ -718,14 +837,14 @@ pub enum EqExp {
 }
 
 impl DumpIR for EqExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::RelExp(rel_exp) => rel_exp.dump_ir(sym_table),
+            Self::RelExp(rel_exp) => rel_exp.dump_ir(sym_table, block_graph),
             Self::Exp((eq_exp, eq_op, rel_exp)) => {
                 let pre_cnt = sym_table.count;
-                let eq_exp_ir: String = eq_exp.dump_ir(sym_table);
+                let eq_exp_ir: String = eq_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let rel_exp_ir: String = rel_exp.dump_ir(sym_table);
+                let rel_exp_ir: String = rel_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -749,20 +868,12 @@ impl DumpIR for EqExp {
 
                 match eq_op {
                     EqOp::Eq => {
-                        ir += &format!(
-                            "\t{} = eq {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = eq {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                     EqOp::NotEq => {
-                        ir += &format!(
-                            "\t{} = ne {}, {}\n",
-                            sym_table.get_new_tsym(),
-                            lhs_sym,
-                            rhs_sym
-                        );
+                        ir +=
+                            &format!("\t{} = ne {}, {}\n", sym_table.get_tsym(), lhs_sym, rhs_sym);
                     }
                 };
                 ir
@@ -794,14 +905,14 @@ pub enum LAndExp {
 }
 
 impl DumpIR for LAndExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::EqExp(eq_exp) => eq_exp.dump_ir(sym_table),
+            Self::EqExp(eq_exp) => eq_exp.dump_ir(sym_table, block_graph),
             Self::Exp((land_exp, eq_exp)) => {
                 let pre_cnt = sym_table.count;
-                let land_exp_ir: String = land_exp.dump_ir(sym_table);
+                let land_exp_ir: String = land_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let eq_exp_ir: String = eq_exp.dump_ir(sym_table);
+                let eq_exp_ir: String = eq_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -823,12 +934,12 @@ impl DumpIR for LAndExp {
                     ir += &eq_exp_ir.to_string();
                 }
 
-                let tem_res = sym_table.get_new_tsym();
+                let tem_res = sym_table.get_tsym();
                 ir += &format!(
                     "\t{tem_res} = mul {}, {}\n\t{} = ne {tem_res}, 0\n",
                     lhs_sym,
                     rhs_sym,
-                    sym_table.get_new_tsym(),
+                    sym_table.get_tsym(),
                 );
 
                 ir
@@ -855,14 +966,14 @@ pub enum LOrExp {
 }
 
 impl DumpIR for LOrExp {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Self::LAndExp(land_exp) => land_exp.dump_ir(sym_table),
+            Self::LAndExp(land_exp) => land_exp.dump_ir(sym_table, block_graph),
             Self::Exp((lor_exp, land_exp)) => {
                 let pre_cnt = sym_table.count;
-                let lor_exp_ir: String = lor_exp.dump_ir(sym_table);
+                let lor_exp_ir: String = lor_exp.dump_ir(sym_table, block_graph);
                 let lhs_cnt = sym_table.count;
-                let land_exp_ir: String = land_exp.dump_ir(sym_table);
+                let land_exp_ir: String = land_exp.dump_ir(sym_table, block_graph);
                 let rhs_cnt = sym_table.count;
 
                 let mut ir: String = String::new();
@@ -884,12 +995,12 @@ impl DumpIR for LOrExp {
                     ir += &land_exp_ir.to_string();
                 }
 
-                let tem_res = sym_table.get_new_tsym();
+                let tem_res = sym_table.get_tsym();
                 ir += &format!(
                     "\t{tem_res} = or {}, {}\n\t{} = ne {tem_res}, 0\n",
                     lhs_sym,
                     rhs_sym,
-                    sym_table.get_new_tsym(),
+                    sym_table.get_tsym(),
                 );
 
                 ir
@@ -949,11 +1060,11 @@ pub struct Block {
 }
 
 impl DumpIR for Block {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         let mut ir: String = String::new();
         sym_table.add_sym_map();
         for block_item in &self.block_items {
-            ir += &block_item.dump_ir(sym_table);
+            ir += &block_item.dump_ir(sym_table, block_graph);
         }
         sym_table.delete_sym_map();
         ir
@@ -967,14 +1078,16 @@ pub enum BlockItem {
 }
 
 impl DumpIR for BlockItem {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        //block_graph.push(self);
+
         let mut ir: String = String::new();
         match self {
             BlockItem::Decl(decl) => {
-                ir += &decl.dump_ir(sym_table);
+                ir += &decl.dump_ir(sym_table, block_graph);
             }
             BlockItem::Stmt(stmt) => {
-                ir += &stmt.dump_ir(sym_table);
+                ir += &stmt.dump_ir(sym_table, block_graph);
             }
         };
         ir
@@ -987,15 +1100,21 @@ pub enum Stmt {
     Exp(Option<Exp>),
     Block(Box<Block>),
     Ret(Exp),
+    Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
 }
 
 impl DumpIR for Stmt {
-    fn dump_ir(&self, sym_table: &mut SymTable) -> String {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
         match self {
-            Stmt::Block(block) => block.dump_ir(sym_table),
+            Stmt::Block(block) => {
+                let ir: String = block.dump_ir(sym_table, block_graph);
+                ir
+            }
             Stmt::Exp(exp) => {
                 if let Some(exp) = exp {
-                    return exp.dump_ir(sym_table);
+                    let ir = exp.dump_ir(sym_table, block_graph);
+                    block_graph.insert_ir(&ir);
+                    return ir;
                 }
                 String::new()
             }
@@ -1008,7 +1127,7 @@ impl DumpIR for Stmt {
                 };
 
                 let pre_cnt = sym_table.count;
-                let exp_ir = exp.dump_ir(sym_table);
+                let exp_ir = exp.dump_ir(sym_table, block_graph);
                 let stmt_cnt = sym_table.count;
 
                 if pre_cnt == stmt_cnt {
@@ -1021,20 +1140,90 @@ impl DumpIR for Stmt {
                         ident
                     );
                 }
+                block_graph.insert_ir(&ir);
                 ir
             }
             Stmt::Ret(exp) => {
                 let mut ir: String = String::new();
                 let pre_cnt = sym_table.count;
-                let exp_ir: String = exp.dump_ir(sym_table);
+                let exp_ir: String = exp.dump_ir(sym_table, block_graph);
                 let ret_cnt = sym_table.count;
                 if pre_cnt == ret_cnt {
                     ir += &format!("\tret {}\n", exp_ir)
                 } else {
                     ir += &format!("{}\tret %{}\n", exp_ir, ret_cnt - 1)
                 };
+                block_graph.insert_ir(&ir);
+
+                block_graph.end(None);
                 ir
             }
+            Stmt::Cond(cond, cons, alter) => {
+                let mut ir: String = String::new();
+
+                let pre_cnt = sym_table.count;
+                let exp_ir = cond.dump_ir(sym_table, block_graph);
+                let cond_cnt = sym_table.count;
+
+                let cons_nm: String = sym_table.get_block_name();
+                let end_nm: String = sym_table.get_block_name();
+                let alter_nm: String = if alter.is_none() {
+                    end_nm.clone()
+                } else {
+                    sym_table.get_block_name()
+                };
+
+                if pre_cnt == cond_cnt {
+                    ir += &format!("\tbr {cond}, %{cons_nm}, %{alter_nm}\n", cond = exp_ir);
+                } else {
+                    ir += &format!(
+                        "{prev_ir}\tbr %{cond}, %{cons_nm}, %{alter_nm}\n",
+                        prev_ir = exp_ir,
+                        cond = cond_cnt - 1,
+                    );
+                }
+                block_graph.insert_ir(&ir);
+
+                block_graph.insert_next(cons_nm.clone());
+                block_graph.insert_next(alter_nm.clone());
+                block_graph.end(Some(cons_nm.clone()));
+
+                let mut cons_ir = cons.dump_ir(sym_table, block_graph);
+
+                if !block_graph.is_end() {
+                    cons_ir += &format!("\tjump %{end_nm}\n");
+
+                    block_graph.insert_ir(&format!("\tjump %{end_nm}\n"));
+                    block_graph.insert_next(end_nm.clone());
+                    block_graph.end(None);
+                }
+
+                match alter {
+                    Some(alter) => {
+                        block_graph.insert(alter_nm.clone());
+
+                        let mut alter_ir = alter.dump_ir(sym_table, block_graph);
+
+                        if !block_graph.is_end() {
+                            alter_ir += &format!("\tjump %{end_nm}\n");
+
+                            block_graph.insert_ir(&format!("\tjump %{end_nm}\n"));
+                            block_graph.insert_next(end_nm.clone());
+                            block_graph.end(None);
+                        }
+
+                        ir += &format!("%{cons_nm}:\n{cons_ir}%{alter_nm}:\n{alter_ir}");
+                    }
+                    None => {
+                        ir += &format!("%{cons_nm}:\n{cons_ir}");
+                    }
+                };
+
+                block_graph.insert(end_nm.clone());
+                ir += &format!("%{end_nm}:\n");
+
+                String::new()
+            } //_ => String::new(),
         }
     }
 }

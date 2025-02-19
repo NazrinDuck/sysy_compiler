@@ -1,4 +1,4 @@
-use koopa::ir::{dfg::DataFlowGraph, TypeKind, Value, ValueKind};
+use koopa::ir::{dfg::DataFlowGraph, BasicBlock, TypeKind, Value, ValueKind};
 use std::collections::HashMap;
 
 pub trait DumpAsm {
@@ -146,6 +146,14 @@ impl RegAllocator<'_> {
             }
         }
     }
+
+    fn get_block_name(&self, target: BasicBlock) -> String {
+        match self.dfg.unwrap().bb(target).name() {
+            Some(entry) if entry == "%entry" => String::from("main"),
+            Some(block_name) => block_name[1..].to_string(),
+            None => panic!("block has no name!"),
+        }
+    }
 }
 
 impl DumpAsm for koopa::ir::Program {
@@ -202,7 +210,13 @@ impl DumpAsm for koopa::ir::FunctionData {
         for (&bb, node) in self.layout().bbs() {
             reg_allocator.dfg = Some(self.dfg());
             let basic_block_data = self.dfg().bb(bb);
-            println!("{:#?}", basic_block_data.name());
+            //println!("{:#?}", basic_block_data.name());
+            let name: String = match basic_block_data.name() {
+                Some(entry) if entry == "%entry" => String::new(),
+                Some(block_name) => format!("{}:\n", &block_name[1..]),
+                None => panic!("block has no name!"),
+            };
+            asm += &name;
 
             for inst in node.insts().keys() {
                 asm += &inst.dump_asm(reg_allocator);
@@ -221,6 +235,22 @@ impl DumpAsm for Value {
         dbg!(value_data);
         match value_data.kind() {
             ValueKind::Integer(_) => (),
+            ValueKind::Jump(jump) => {
+                let mut ret_asm: String = String::new();
+                let jump_name: String = reg_allocator.get_block_name(jump.target());
+                ret_asm += &format!("\tj\t{}\n", jump_name);
+                asm.push_str(&ret_asm);
+            }
+            ValueKind::Branch(branch) => {
+                let mut ret_asm: String = String::new();
+                let true_bb_name: String = reg_allocator.get_block_name(branch.true_bb());
+                let false_bb_name: String = reg_allocator.get_block_name(branch.false_bb());
+
+                let cond_reg: String = branch.cond().dump_reg(&mut ret_asm, reg_allocator);
+                ret_asm += &format!("\tbnez\t{}, {}\n", cond_reg, true_bb_name);
+                ret_asm += &format!("\tj\t{}\n", false_bb_name);
+                asm.push_str(&ret_asm);
+            }
             ValueKind::Store(store) => {
                 let mut ret_asm: String = String::new();
                 let value_reg: String = store.value().dump_reg(&mut ret_asm, reg_allocator);

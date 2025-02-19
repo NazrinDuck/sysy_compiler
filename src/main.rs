@@ -1,5 +1,5 @@
 use asm::{DumpAsm, RegAllocator};
-use ast::{DumpIR, SymTable};
+use ast::{BlockGraph, CompUnit, DumpIR, SymTable};
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
@@ -26,7 +26,8 @@ fn main() -> std::io::Result<()> {
 
     let ast = sys::CompUnitParser::new().parse(&source_code).unwrap();
     println!("{:#?}", ast);
-    let ast = ast.dump_ir(&mut SymTable::new());
+    let ast = generate_ast(ast);
+
     println!("\x1b[01;32mast:\n{}\x1b[0m", ast);
 
     match &mode[..] {
@@ -34,6 +35,7 @@ fn main() -> std::io::Result<()> {
         "-riscv" => {
             let driver = koopa::front::Driver::from(ast.clone());
             let program = driver.generate_program().unwrap();
+
             let asm: String = program.dump_asm(&mut RegAllocator::new());
 
             generate_file(out_file, asm.clone()).unwrap();
@@ -48,6 +50,16 @@ fn main() -> std::io::Result<()> {
     //parser(program);
 
     Ok(())
+}
+
+fn generate_ast(comp_unit: CompUnit) -> String {
+    let mut sym_table = SymTable::new();
+    let mut block_graph = BlockGraph::new();
+    let ast = comp_unit.dump_ir(&mut sym_table, &mut block_graph);
+    // dbg!(sym_table);
+    dbg!(&block_graph);
+    // block_graph.generate_ir();
+    ast
 }
 
 fn generate_file(mut file: File, content: String) -> Result<(), Box<dyn std::error::Error>> {

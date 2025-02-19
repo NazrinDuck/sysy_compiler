@@ -79,6 +79,21 @@ BlockItem: BlockItem = {
 };
 
 Stmt: Stmt = {
+  <open_stmt: OpenStmt> => <>,
+  <close_stmt: CloseStmt> => <>,
+};
+
+OpenStmt: Stmt = {
+  "if" "(" <cond: Exp> ")" <cons: Stmt> => Stmt::Cond(cond, Box::new(cons), None),
+  "if" "(" <cond: Exp> ")" <cons: CloseStmt> "else" <alter: OpenStmt> => Stmt::Cond(cond, Box::new(cons), Some(Box::new(alter))),
+};
+
+CloseStmt: Stmt = {
+  <simple_stmt: SimpleStmt> => <>,
+  "if" "(" <cond: Exp> ")" <cons: CloseStmt> "else" <alter: CloseStmt> => Stmt::Cond(cond, Box::new(cons), Some(Box::new(alter))),
+};
+
+SimpleStmt: Stmt = {
   <lval: LVal> "=" <exp: Exp> ";" => Stmt::SetLVal(lval, exp),
   <exp: Exp?> ";" => Stmt::Exp( <> ),
   <block: Block> => Stmt::Block( Box::new( <> ) ),

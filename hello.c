@@ -1,11 +1,14 @@
 // sssss
+
 int main() {
-  int a = 1;
-  {
-    a = a + 2;
+  int a = 7, b = 9;
+  if (a > b) {
+    a = 8;
   }
-  return a;
+  return 1;
+  return 2;
 }
+
 // int main() { return (-1 + !1) * (+1 - 2); }
 //  ???
 /* ??? */
