@@ -209,14 +209,12 @@ impl DumpAsm for koopa::ir::FunctionData {
         }
         for (&bb, node) in self.layout().bbs() {
             reg_allocator.dfg = Some(self.dfg());
-            let basic_block_data = self.dfg().bb(bb);
+            //let basic_block_data = self.dfg().bb(bb);
             //println!("{:#?}", basic_block_data.name());
-            let name: String = match basic_block_data.name() {
-                Some(entry) if entry == "%entry" => String::new(),
-                Some(block_name) => format!("{}:\n", &block_name[1..]),
-                None => panic!("block has no name!"),
-            };
-            asm += &name;
+            let name: String = reg_allocator.get_block_name(bb);
+            if name != "main" {
+                asm += &format!("{name}:\n");
+            }
 
             for inst in node.insts().keys() {
                 asm += &inst.dump_asm(reg_allocator);

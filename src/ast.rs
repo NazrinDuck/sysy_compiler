@@ -1,9 +1,16 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
+use super::ir::generate_ir;
+use block::{BlockEnd, BlockGraph, Branch, Jump};
+use symbol::{Sym, SymTable};
+
+pub mod block;
+pub mod symbol;
 
 pub trait DumpIR {
     fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String;
+}
+
+pub trait ParseIR {
+    fn parse_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph);
 }
 
 pub trait ParseSym {
@@ -12,244 +19,6 @@ pub trait ParseSym {
 
 pub trait DumpVal {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32;
-}
-
-type VarID = String;
-
-#[derive(Debug, Clone)]
-enum Sym {
-    ConstInt(i32),
-    ConstStr(String),
-    VarInt((VarID, Option<i32>)),
-}
-
-#[derive(Debug)]
-struct SymMap {
-    symbols: HashMap<String, Sym>,
-    parent: Option<Rc<RefCell<SymMap>>>,
-    depth: u32,
-    cnt: u32,
-}
-impl SymMap {
-    fn new() -> Self {
-        SymMap {
-            symbols: HashMap::new(),
-            parent: None,
-            depth: 0,
-            cnt: 1,
-        }
-    }
-
-    fn insert(&mut self, ident: String, sym: Sym) {
-        let sym_cnt: Sym = if let Sym::VarInt((var_id, var_val)) = sym {
-            Sym::VarInt((format!("{}_{}", var_id, self.cnt), var_val))
-        } else {
-            sym
-        };
-        self.symbols.insert(ident, sym_cnt);
-        self.cnt += 1;
-    }
-
-    fn search(&self, ident: String) -> Result<Sym, String> {
-        match self.symbols.get(&ident) {
-            None => match &self.parent {
-                None => Err(format!("can't find symbol: {}!", ident)),
-                Some(parent) => parent.borrow().search(ident),
-            },
-            Some(sym) => match sym {
-                Sym::VarInt((id, var)) => {
-                    let var_int = Sym::VarInt((format!("{}_{}", id, self.depth), *var));
-                    Ok(var_int)
-                }
-                _ => Ok(sym.clone()),
-            },
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SymTable {
-    curr_map: Rc<RefCell<SymMap>>,
-    tem_symbols: Vec<(String, bool, Option<u32>)>,
-    count: u32,
-    block_cnt: u32,
-}
-
-impl SymTable {
-    pub fn new() -> Self {
-        let rc_sym_map = Rc::new(RefCell::new(SymMap::new()));
-        SymTable {
-            curr_map: Rc::clone(&rc_sym_map),
-            tem_symbols: Vec::new(),
-            count: 0,
-            block_cnt: 0,
-        }
-    }
-
-    fn get_tsym(&mut self) -> String {
-        let symbol: String = format!("%{}", self.count);
-        self.tem_symbols
-            .push((symbol.clone(), true, Some(self.count)));
-        self.count += 1;
-        symbol
-    }
-
-    fn find_tsym(&self, val: u32) -> Result<String, String> {
-        for sym in self.tem_symbols.clone() {
-            if let Some(sym_val) = sym.2 {
-                if sym_val == val && sym.1 {
-                    return Ok(sym.0);
-                }
-            }
-        }
-        Err(format!("can't find fitable temporary symbols: {}", val).to_string())
-    }
-
-    fn insert_sym(&mut self, ident: String, sym: Sym) {
-        self.curr_map.borrow_mut().insert(ident, sym);
-    }
-    fn search_sym(&mut self, ident: String) -> Sym {
-        match self.curr_map.borrow().search(ident) {
-            Ok(sym) => sym,
-            Err(e) => panic!("{}", e),
-        }
-    }
-
-    fn add_sym_map(&mut self) {
-        let new_sym_map = Rc::new(RefCell::new(SymMap::new()));
-        new_sym_map.borrow_mut().parent = Some(Rc::clone(&self.curr_map));
-        new_sym_map.borrow_mut().depth = self.curr_map.borrow().depth + 1;
-        self.curr_map = Rc::clone(&new_sym_map);
-    }
-    fn delete_sym_map(&mut self) {
-        let curr_map = Rc::clone(&self.curr_map);
-        match &curr_map.borrow().parent {
-            None => panic!("can't find parent symbol map!"),
-            Some(parent) => {
-                self.curr_map = Rc::clone(parent);
-            }
-        };
-    }
-    fn get_block_name(&mut self) -> String {
-        let name = format!("BR{}", self.block_cnt);
-        self.block_cnt += 1;
-        name
-    }
-}
-
-#[derive(Debug)]
-struct BaseBlock {
-    name: String,
-    is_end: bool,
-    ir: String,
-    next: Vec<String>,
-}
-// ir bond base_block is a good idea ithk
-
-impl BaseBlock {
-    fn new(name: String) -> Self {
-        BaseBlock {
-            name,
-            is_end: false,
-            ir: String::new(),
-            next: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct BlockGraph {
-    map: HashMap<String, BaseBlock>,
-    entry: String,
-    curr_map: String,
-}
-
-impl BlockGraph {
-    pub fn new() -> Self {
-        BlockGraph {
-            map: HashMap::new(),
-            entry: String::new(),
-            curr_map: String::new(),
-        }
-    }
-
-    fn find_mut_block(&mut self, name: &String) -> &mut BaseBlock {
-        match self.map.get_mut(name) {
-            Some(base_block) => base_block,
-            None => panic!("the map is empty!"),
-        }
-    }
-
-    fn find_block(&self, name: &String) -> &BaseBlock {
-        match self.map.get(name) {
-            Some(base_block) => base_block,
-            None => panic!("the map is empty!"),
-        }
-    }
-
-    fn curr_block(&mut self) -> &mut BaseBlock {
-        let name: String = self.curr_map.clone();
-        self.find_mut_block(&name)
-    }
-
-    fn insert(&mut self, name: String) {
-        let new_base_block = BaseBlock::new(name.clone());
-
-        /*
-                if let Some(base_block) = self.map.get_mut(&self.curr_map) {
-                    base_block.next.push(name.clone());
-                }
-        */
-
-        self.curr_map = name.clone();
-        self.map.insert(name, new_base_block);
-    }
-
-    fn set_entry(&mut self, enrty: String) {
-        self.insert(enrty.clone());
-        self.entry = enrty;
-    }
-    fn end(&mut self, next: Option<String>) {
-        self.curr_block().is_end = true;
-
-        if let Some(next_name) = next {
-            self.insert(next_name);
-        }
-    }
-
-    fn is_end(&self) -> bool {
-        self.map.get(&self.curr_map).unwrap().is_end
-    }
-
-    fn insert_next(&mut self, next: String) {
-        self.curr_block().next.push(next);
-    }
-
-    fn insert_ir(&mut self, ir: &String) {
-        if !self.curr_block().is_end {
-            self.curr_block().ir += ir;
-        }
-    }
-
-    pub fn generate_ir(&self) -> String {
-        let mut queue: VecDeque<String> = VecDeque::new();
-        queue.push_back(self.entry.clone());
-        let mut set: HashSet<String> = HashSet::new();
-        let mut ir: String = String::new();
-        set.insert(self.entry.clone());
-
-        while !queue.is_empty() {
-            let name = queue.pop_front().unwrap();
-            ir += &format!("%{}:\n{}", name, self.find_block(&name).ir.clone());
-            for ele in self.map.get(&name).unwrap().next.clone() {
-                if !set.contains(&ele) {
-                    set.insert(ele.clone());
-                    queue.push_back(ele);
-                }
-            }
-        }
-        ir
-    }
 }
 
 #[derive(Debug)]
@@ -266,24 +35,42 @@ impl DumpIR for CompUnit {
 }
 
 #[derive(Debug)]
+pub struct FuncDef {
+    pub func_type: FuncType,
+    pub ident: String,
+    pub block: Block,
+}
+
+impl DumpIR for FuncDef {
+    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+        block_graph.start();
+        self.block.parse_ir(sym_table, block_graph);
+        format!(
+            "fun @{ident}(): {func_type} {{\n{block}}}",
+            ident = self.ident,
+            func_type = self.func_type.dump_ir(sym_table, block_graph),
+            //block = block_graph.generate_ir(),
+            block = generate_ir(block_graph),
+        )
+    }
+}
+
+#[derive(Debug)]
 pub enum Decl {
     ConstDecl(ConstDecl),
     VarDecl(VarDecl),
 }
 
-impl DumpIR for Decl {
-    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+impl ParseIR for Decl {
+    fn parse_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) {
         match self {
             Decl::ConstDecl(const_decl) => {
                 const_decl.parse_sym(sym_table);
-                String::new()
             }
             Decl::VarDecl(var_decl) => {
                 var_decl.parse_sym(sym_table);
                 let ir: String = var_decl.dump_ir(sym_table, block_graph);
-
-                block_graph.curr_block().ir += &ir;
-                ir
+                block_graph.insert_ir(&ir);
             }
         }
     }
@@ -369,9 +156,9 @@ impl DumpIR for VarDecl {
             };
             ir += &format!("\t{} = alloc {}\n", ident, sym_type);
             if let Some(init_val) = &var_def.init_val {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let init_val_ir = init_val.dump_ir(sym_table, block_graph);
-                let var_cnt = sym_table.count;
+                let var_cnt = sym_table.get_cnt();
 
                 if pre_cnt == var_cnt {
                     ir += &format!("\tstore {}, {}\n", init_val_ir, ident);
@@ -419,27 +206,6 @@ pub struct ConstExp {
 impl DumpVal for ConstExp {
     fn dump_val(&self, sym_table: &mut SymTable) -> i32 {
         self.exp.dump_val(sym_table)
-    }
-}
-
-#[derive(Debug)]
-pub struct FuncDef {
-    pub func_type: FuncType,
-    pub ident: String,
-    pub block: Block,
-}
-
-impl DumpIR for FuncDef {
-    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
-        block_graph.set_entry(String::from("entry"));
-        let ir = self.block.dump_ir(sym_table, block_graph);
-        format!(
-            "fun @{ident}(): {func_type} {{\n{block}}}",
-            ident = self.ident,
-            func_type = self.func_type.dump_ir(sym_table, block_graph),
-            //block = ir,
-            block = block_graph.generate_ir(),
-        )
     }
 }
 
@@ -529,9 +295,9 @@ impl DumpIR for UnaryExp {
         match self {
             Self::PrimaryExp(primary_exp) => primary_exp.dump_ir(sym_table, block_graph),
             Self::Exp((unary_op, unary_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let unary_exp_ir: String = unary_exp.dump_ir(sym_table, block_graph);
-                let unary_cnt = sym_table.count;
+                let unary_cnt = sym_table.get_cnt();
 
                 let mut ir: String;
 
@@ -601,11 +367,11 @@ impl DumpIR for MulExp {
         match self {
             Self::UnaryExp(unary_exp) => unary_exp.dump_ir(sym_table, block_graph),
             Self::Exp((mul_exp, mul_op, unary_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let mul_exp_ir: String = mul_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let unary_exp_ir: String = unary_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -687,11 +453,11 @@ impl DumpIR for AddExp {
         match self {
             Self::MulExp(mul_exp) => (*mul_exp).dump_ir(sym_table, block_graph),
             Self::Exp((add_exp, add_op, mul_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let add_exp_ir: String = add_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let mul_exp_ir: String = mul_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -763,11 +529,11 @@ impl DumpIR for RelExp {
         match self {
             Self::AddExp(add_exp) => add_exp.dump_ir(sym_table, block_graph),
             Self::Exp((rel_exp, rel_op, add_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let rel_exp_ir: String = rel_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let add_exp_ir: String = add_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -841,11 +607,11 @@ impl DumpIR for EqExp {
         match self {
             Self::RelExp(rel_exp) => rel_exp.dump_ir(sym_table, block_graph),
             Self::Exp((eq_exp, eq_op, rel_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let eq_exp_ir: String = eq_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let rel_exp_ir: String = rel_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -909,11 +675,11 @@ impl DumpIR for LAndExp {
         match self {
             Self::EqExp(eq_exp) => eq_exp.dump_ir(sym_table, block_graph),
             Self::Exp((land_exp, eq_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let land_exp_ir: String = land_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let eq_exp_ir: String = eq_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -970,11 +736,11 @@ impl DumpIR for LOrExp {
         match self {
             Self::LAndExp(land_exp) => land_exp.dump_ir(sym_table, block_graph),
             Self::Exp((lor_exp, land_exp)) => {
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let lor_exp_ir: String = lor_exp.dump_ir(sym_table, block_graph);
-                let lhs_cnt = sym_table.count;
+                let lhs_cnt = sym_table.get_cnt();
                 let land_exp_ir: String = land_exp.dump_ir(sym_table, block_graph);
-                let rhs_cnt = sym_table.count;
+                let rhs_cnt = sym_table.get_cnt();
 
                 let mut ir: String = String::new();
 
@@ -1059,15 +825,13 @@ pub struct Block {
     pub block_items: Vec<BlockItem>,
 }
 
-impl DumpIR for Block {
-    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
-        let mut ir: String = String::new();
+impl ParseIR for Block {
+    fn parse_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) {
         sym_table.add_sym_map();
         for block_item in &self.block_items {
-            ir += &block_item.dump_ir(sym_table, block_graph);
+            block_item.parse_ir(sym_table, block_graph);
         }
         sym_table.delete_sym_map();
-        ir
     }
 }
 
@@ -1077,20 +841,16 @@ pub enum BlockItem {
     Stmt(Stmt),
 }
 
-impl DumpIR for BlockItem {
-    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
-        //block_graph.push(self);
-
-        let mut ir: String = String::new();
+impl ParseIR for BlockItem {
+    fn parse_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) {
         match self {
             BlockItem::Decl(decl) => {
-                ir += &decl.dump_ir(sym_table, block_graph);
+                decl.parse_ir(sym_table, block_graph);
             }
             BlockItem::Stmt(stmt) => {
-                ir += &stmt.dump_ir(sym_table, block_graph);
+                stmt.parse_ir(sym_table, block_graph);
             }
         };
-        ir
     }
 }
 
@@ -1103,20 +863,17 @@ pub enum Stmt {
     Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
 }
 
-impl DumpIR for Stmt {
-    fn dump_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) -> String {
+impl ParseIR for Stmt {
+    fn parse_ir(&self, sym_table: &mut SymTable, block_graph: &mut BlockGraph) {
         match self {
             Stmt::Block(block) => {
-                let ir: String = block.dump_ir(sym_table, block_graph);
-                ir
+                block.parse_ir(sym_table, block_graph);
             }
             Stmt::Exp(exp) => {
                 if let Some(exp) = exp {
                     let ir = exp.dump_ir(sym_table, block_graph);
                     block_graph.insert_ir(&ir);
-                    return ir;
                 }
-                String::new()
             }
             Stmt::SetLVal(lval, exp) => {
                 let mut ir: String = String::new();
@@ -1126,9 +883,9 @@ impl DumpIR for Stmt {
                     _ => panic!("symbol don't match"),
                 };
 
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let exp_ir = exp.dump_ir(sym_table, block_graph);
-                let stmt_cnt = sym_table.count;
+                let stmt_cnt = sym_table.get_cnt();
 
                 if pre_cnt == stmt_cnt {
                     ir += &format!("\tstore {}, {}\n", exp_ir, ident);
@@ -1140,89 +897,67 @@ impl DumpIR for Stmt {
                         ident
                     );
                 }
+
                 block_graph.insert_ir(&ir);
-                ir
             }
             Stmt::Ret(exp) => {
                 let mut ir: String = String::new();
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let exp_ir: String = exp.dump_ir(sym_table, block_graph);
-                let ret_cnt = sym_table.count;
+                let ret_cnt = sym_table.get_cnt();
                 if pre_cnt == ret_cnt {
                     ir += &format!("\tret {}\n", exp_ir)
                 } else {
                     ir += &format!("{}\tret %{}\n", exp_ir, ret_cnt - 1)
                 };
-                block_graph.insert_ir(&ir);
 
-                block_graph.end(None);
-                ir
+                block_graph.insert_ir(&ir);
+                block_graph.end(BlockEnd::Ret);
             }
             Stmt::Cond(cond, cons, alter) => {
                 let mut ir: String = String::new();
 
-                let pre_cnt = sym_table.count;
+                let pre_cnt = sym_table.get_cnt();
                 let exp_ir = cond.dump_ir(sym_table, block_graph);
-                let cond_cnt = sym_table.count;
+                let cond_cnt = sym_table.get_cnt();
 
-                let cons_nm: String = sym_table.get_block_name();
-                let end_nm: String = sym_table.get_block_name();
-                let alter_nm: String = if alter.is_none() {
-                    end_nm.clone()
+                let cons_id: u32 = block_graph.get_new_block();
+                let end_id: u32 = block_graph.get_new_block();
+                let alter_id: u32 = if alter.is_none() {
+                    end_id
                 } else {
-                    sym_table.get_block_name()
+                    block_graph.get_new_block()
                 };
 
-                if pre_cnt == cond_cnt {
-                    ir += &format!("\tbr {cond}, %{cons_nm}, %{alter_nm}\n", cond = exp_ir);
+                let cond_val: String = if pre_cnt == cond_cnt {
+                    exp_ir
                 } else {
-                    ir += &format!(
-                        "{prev_ir}\tbr %{cond}, %{cons_nm}, %{alter_nm}\n",
-                        prev_ir = exp_ir,
-                        cond = cond_cnt - 1,
-                    );
-                }
+                    ir += &exp_ir;
+                    format!("%{}", cond_cnt - 1)
+                };
+
                 block_graph.insert_ir(&ir);
 
-                block_graph.insert_next(cons_nm.clone());
-                block_graph.insert_next(alter_nm.clone());
-                block_graph.end(Some(cons_nm.clone()));
+                let branch: Branch = Branch {
+                    cond: cond_val,
+                    cons: cons_id,
+                    alter: alter_id,
+                };
+                block_graph.end(BlockEnd::Branch(branch));
 
-                let mut cons_ir = cons.dump_ir(sym_table, block_graph);
+                cons.parse_ir(sym_table, block_graph);
 
-                if !block_graph.is_end() {
-                    cons_ir += &format!("\tjump %{end_nm}\n");
+                block_graph.end(BlockEnd::Jump(Jump { dest: end_id }));
 
-                    block_graph.insert_ir(&format!("\tjump %{end_nm}\n"));
-                    block_graph.insert_next(end_nm.clone());
-                    block_graph.end(None);
-                }
+                if let Some(alter) = alter {
+                    block_graph.set_corrent_id(alter_id);
 
-                match alter {
-                    Some(alter) => {
-                        block_graph.insert(alter_nm.clone());
+                    alter.parse_ir(sym_table, block_graph);
 
-                        let mut alter_ir = alter.dump_ir(sym_table, block_graph);
-
-                        if !block_graph.is_end() {
-                            alter_ir += &format!("\tjump %{end_nm}\n");
-
-                            block_graph.insert_ir(&format!("\tjump %{end_nm}\n"));
-                            block_graph.insert_next(end_nm.clone());
-                            block_graph.end(None);
-                        }
-
-                        ir += &format!("%{cons_nm}:\n{cons_ir}%{alter_nm}:\n{alter_ir}");
-                    }
-                    None => {
-                        ir += &format!("%{cons_nm}:\n{cons_ir}");
-                    }
+                    block_graph.end(BlockEnd::Jump(Jump { dest: end_id }));
                 };
 
-                block_graph.insert(end_nm.clone());
-                ir += &format!("%{end_nm}:\n");
-
-                String::new()
+                block_graph.set_corrent_id(end_id);
             } //_ => String::new(),
         }
     }

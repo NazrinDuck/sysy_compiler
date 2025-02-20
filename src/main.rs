@@ -1,5 +1,6 @@
 use asm::{DumpAsm, RegAllocator};
-use ast::{BlockGraph, CompUnit, DumpIR, SymTable};
+use ast::{block::BlockGraph, symbol::SymTable, CompUnit, DumpIR};
+use ir::generate_ir;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
@@ -7,12 +8,11 @@ use std::io::Write;
 
 mod asm;
 mod ast;
-// 引用 lalrpop 生成的解析器
-// 因为我们刚刚创建了 sysy.lalrpop, 所以模块名是 sysy
+mod ir;
+
 lalrpop_mod!(sys);
 
 fn main() -> std::io::Result<()> {
-    // 解析命令行参数
     let mut args = args();
     args.next();
     let mode = args.next().unwrap();
@@ -20,12 +20,11 @@ fn main() -> std::io::Result<()> {
     args.next();
     let output = args.next().unwrap();
 
-    // 读取输入文件
     let source_code = read_to_string(input)?;
     let out_file = File::create(output)?;
 
     let ast = sys::CompUnitParser::new().parse(&source_code).unwrap();
-    println!("{:#?}", ast);
+    //println!("{:#?}", ast);
     let ast = generate_ast(ast);
 
     println!("\x1b[01;32mast:\n{}\x1b[0m", ast);
@@ -45,9 +44,6 @@ fn main() -> std::io::Result<()> {
     }
 
     // let a: ast::UnaryExp = ast::UnaryExp::PrimaryExp(Box::new(ast::PrimaryExp::Number(12)));
-    // 调用 lalrpop 生成的 parser 解析输入文件
-
-    //parser(program);
 
     Ok(())
 }
@@ -56,8 +52,8 @@ fn generate_ast(comp_unit: CompUnit) -> String {
     let mut sym_table = SymTable::new();
     let mut block_graph = BlockGraph::new();
     let ast = comp_unit.dump_ir(&mut sym_table, &mut block_graph);
+    //print!("{}", generate_ir(&mut block_graph));
     // dbg!(sym_table);
-    dbg!(&block_graph);
     // block_graph.generate_ir();
     ast
 }
