@@ -86,11 +86,15 @@ Stmt: Stmt = {
 OpenStmt: Stmt = {
   "if" "(" <cond: Exp> ")" <cons: Stmt> => Stmt::Cond(cond, Box::new(cons), None),
   "if" "(" <cond: Exp> ")" <cons: CloseStmt> "else" <alter: OpenStmt> => Stmt::Cond(cond, Box::new(cons), Some(Box::new(alter))),
+  "while" "(" <cond: Exp> ")" <stmt: OpenStmt> => Stmt::While(cond, Box::new(stmt)),
+  "break" ";" => Stmt::Break,
+  "continue" ";" => Stmt::Continue,
 };
 
 CloseStmt: Stmt = {
   <simple_stmt: SimpleStmt> => <>,
   "if" "(" <cond: Exp> ")" <cons: CloseStmt> "else" <alter: CloseStmt> => Stmt::Cond(cond, Box::new(cons), Some(Box::new(alter))),
+  "while" "(" <cond: Exp> ")" <stmt: CloseStmt> => Stmt::While(cond, Box::new(stmt)),
 };
 
 SimpleStmt: Stmt = {

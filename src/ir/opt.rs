@@ -49,6 +49,8 @@ pub fn repl_const_val_br(block_graph: &mut BlockGraph) {
                 } else {
                     (*alter, *cons)
                 };
+                block_graph.find_mut_block(id).next.remove(&f_id);
+
                 let f_id = block_graph.find_mut_block(f_id);
                 f_id.prev.remove(&id);
 

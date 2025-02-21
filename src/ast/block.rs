@@ -27,7 +27,7 @@ pub struct BaseBlock {
     ir: String,
     block_end: Option<BlockEnd>,
     pub prev: HashSet<BlockID>,
-    pub next: Vec<BlockID>,
+    pub next: HashSet<BlockID>,
 }
 // ir bond base_block is a good idea ithk
 
@@ -38,7 +38,7 @@ impl BaseBlock {
             block_end: None,
             ir: String::new(),
             prev: HashSet::new(),
-            next: Vec::new(),
+            next: HashSet::new(),
         }
     }
 
@@ -62,7 +62,7 @@ impl BaseBlock {
         self.block_end.as_ref().unwrap()
     }
 
-    pub fn replace(&mut self, id1: BlockID, id2: BlockID) {
+    fn replace(&mut self, id1: BlockID, id2: BlockID) {
         match self.block_end.as_mut().unwrap() {
             BlockEnd::Ret => (),
             BlockEnd::Branch(Branch {
@@ -80,11 +80,9 @@ impl BaseBlock {
             }
         };
 
-        self.next.iter_mut().for_each(|x| {
-            if *x == id1 {
-                *x = id2;
-            }
-        });
+        if self.next.remove(&id1) {
+            self.next.insert(id2);
+        }
     }
 
     pub fn generate_ir(&self) -> String {
@@ -96,11 +94,24 @@ pub const DEFAULT_ENTRY: BlockID = 1;
 pub const INVALID: BlockID = 0;
 
 #[derive(Debug)]
+pub struct Loop {
+    pub entry: BlockID,
+    pub end: BlockID,
+}
+
+impl Loop {
+    pub fn new(entry: BlockID, end: BlockID) -> Self {
+        Loop { entry, end }
+    }
+}
+
+#[derive(Debug)]
 pub struct BlockGraph {
     map: HashMap<BlockID, BaseBlock>,
     curr_id: BlockID,
     block_id_cnt: u32,
     entry: BlockID,
+    loop_stack: Vec<Loop>,
 }
 
 impl BlockGraph {
@@ -110,6 +121,7 @@ impl BlockGraph {
             curr_id: INVALID,
             block_id_cnt: DEFAULT_ENTRY,
             entry: DEFAULT_ENTRY,
+            loop_stack: Vec::new(),
         }
     }
 
@@ -120,16 +132,23 @@ impl BlockGraph {
     }
 
     pub fn find_mut_block(&mut self, id: BlockID) -> &mut BaseBlock {
+        let dbg_map = self.map.clone();
         match self.map.get_mut(&id) {
             Some(base_block) => base_block,
-            None => panic!("can't find {id}: the map is empty!"),
+            None => {
+                dbg!(dbg_map);
+                panic!("can't find {id} in map!");
+            }
         }
     }
 
     pub fn find_block(&self, id: BlockID) -> &BaseBlock {
         match self.map.get(&id) {
             Some(base_block) => base_block,
-            None => panic!("can't find {id}: the map is empty!"),
+            None => {
+                dbg!(self.map.clone());
+                panic!("can't find {id} in map!");
+            }
         }
     }
 
@@ -148,7 +167,7 @@ impl BlockGraph {
         id
     }
 
-    /// Unlink basic block will remove the block with block id @id
+    /// `Unlink` basic block will remove the block with block id @id
     /// then connect the previous block and next block
     /// Only allow this two type:
     ///     1. jump-end block
@@ -167,9 +186,17 @@ impl BlockGraph {
     #[inline]
     pub fn unlink(&mut self, id: BlockID) {
         let block = self.find_block(id).clone();
-        dbg!(&block);
 
-        if block.prev.is_empty() && id != self.entry {
+        /*
+         * Remove unused block
+         * if the block is not the entry and has no prev
+         * then remove it recursively
+         *
+         * ** Use `iter()` function with markings to remove block will probably cause `Null` prev **
+         * Use `unlink()` function will more saftey and ** it works **
+         */
+        let entry = self.entry;
+        if block.prev.is_empty() && id != entry {
             for next in block.next {
                 let next_block = self.find_mut_block(next);
                 next_block.prev.remove(&id);
@@ -181,14 +208,30 @@ impl BlockGraph {
             return;
         }
 
+        /*
+         * Only can unlink jump-end block
+         * brand-end block has two next and ret-end block has no next
+         */
         if let BlockEnd::Jump(Jump { dest }) = block.block_end.unwrap() {
+            // jump-to-self block can not be unlinked
+            if dest == id {
+                return;
+            };
+
             let next = self.find_mut_block(dest);
             next.prev.remove(&id);
 
-            if id == self.entry {
-                self.entry = dest;
-                self.map.remove(&id);
-                return;
+            if id == entry {
+                if next.prev.is_empty() {
+                    self.entry = dest;
+                    self.map.remove(&id);
+                    return;
+                } else {
+                    next.prev.insert(id);
+                    // i don't think it's a good idea
+                    // but it works
+                    return;
+                }
             }
 
             for prev in block.prev {
@@ -243,7 +286,7 @@ impl BlockGraph {
     /// push next into current block
     /// also push prev into the next block
     pub fn insert_next(&mut self, next: BlockID) {
-        self.curr_block().next.push(next);
+        self.curr_block().next.insert(next);
         let curr_id = self.curr_id;
         self.find_mut_block(next).prev.insert(curr_id);
     }
@@ -252,6 +295,18 @@ impl BlockGraph {
         if self.curr_block().block_end.is_none() {
             self.curr_block().ir += ir;
         }
+    }
+
+    pub fn push_loop(&mut self, loop_uint: Loop) {
+        self.loop_stack.push(loop_uint);
+    }
+
+    pub fn pop_loop(&mut self) {
+        self.loop_stack.pop().unwrap();
+    }
+
+    pub fn top_loop(&self) -> &Loop {
+        self.loop_stack.last().unwrap()
     }
 
     pub fn iter(&self) -> BlockIter {
@@ -287,7 +342,7 @@ impl Iterator for BlockIter {
         }
 
         let id = self.queue.pop_front().unwrap();
-        for ele in self.map.get(&id).unwrap().next.clone() {
+        for &ele in self.map.get(&id).unwrap().next.iter() {
             if !self.set.contains(&ele) {
                 self.set.insert(ele);
                 self.queue.push_back(ele);

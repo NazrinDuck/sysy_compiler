@@ -1,5 +1,5 @@
 use super::ir::generate_ir;
-use block::{BlockEnd, BlockGraph, Branch, Jump};
+use block::{BlockEnd, BlockGraph, Branch, Jump, Loop};
 use symbol::{Sym, SymTable};
 
 pub mod block;
@@ -49,7 +49,6 @@ impl DumpIR for FuncDef {
             "fun @{ident}(): {func_type} {{\n{block}}}",
             ident = self.ident,
             func_type = self.func_type.dump_ir(sym_table, block_graph),
-            //block = block_graph.generate_ir(),
             block = generate_ir(block_graph),
         )
     }
@@ -860,6 +859,9 @@ pub enum Stmt {
     Exp(Option<Exp>),
     Block(Box<Block>),
     Ret(Exp),
+    While(Exp, Box<Stmt>),
+    Break,
+    Continue,
     Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
 }
 
@@ -914,6 +916,54 @@ impl ParseIR for Stmt {
                 block_graph.insert_ir(&ir);
                 block_graph.end(BlockEnd::Ret);
             }
+            Stmt::While(entry, stmt) => {
+                let entry_id: u32 = block_graph.get_new_block();
+                let body_id: u32 = block_graph.get_new_block();
+                let end_id: u32 = block_graph.get_new_block();
+
+                block_graph.push_loop(Loop::new(entry_id, end_id));
+                block_graph.end(BlockEnd::Jump(Jump { dest: entry_id }));
+                block_graph.set_corrent_id(entry_id);
+
+                let mut ir: String = String::new();
+
+                let pre_cnt = sym_table.get_cnt();
+                let entry_ir: String = entry.dump_ir(sym_table, block_graph);
+                let entry_cnt = sym_table.get_cnt();
+
+                let entry_val: String = if pre_cnt == entry_cnt {
+                    entry_ir
+                } else {
+                    ir += &entry_ir;
+                    format!("%{}", entry_cnt - 1)
+                };
+
+                block_graph.insert_ir(&ir);
+
+                let branch: Branch = Branch {
+                    cond: entry_val,
+                    cons: body_id,
+                    alter: end_id,
+                };
+                block_graph.end(BlockEnd::Branch(branch));
+
+                stmt.parse_ir(sym_table, block_graph);
+
+                block_graph.pop_loop();
+                block_graph.end(BlockEnd::Jump(Jump { dest: entry_id }));
+                block_graph.set_corrent_id(end_id);
+            }
+
+            Stmt::Break => {
+                let end_id = block_graph.top_loop().end;
+                block_graph.end(BlockEnd::Jump(Jump { dest: end_id }));
+            }
+
+            Stmt::Continue => {
+                let entry_id = block_graph.top_loop().entry;
+                block_graph.end(BlockEnd::Jump(Jump { dest: entry_id }));
+            }
+
             Stmt::Cond(cond, cons, alter) => {
                 let mut ir: String = String::new();
 
