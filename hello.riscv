@@ -1,0 +1,83 @@
+	.text
+	.globl main
+main:
+	addi	sp, sp, -16
+	j	BR1
+BR1:
+	li	t0, 1
+	sw	t0, 4(sp)
+	li	t0, 2
+	sw	t0, 8(sp)
+	lw	t1, 4(sp)
+	li	t2, 1
+	xor	t0, t1, t2
+	seqz	t0, t0
+	bnez	t0, BR2
+	j	BR3
+BR2:
+	lw	t2, 4(sp)
+	lw	t3, 8(sp)
+	slt	t1, t2, t3
+	bnez	t1, BR4
+	j	BR5
+BR3:
+	lw	t3, 8(sp)
+	li	t4, 6
+	xor	t2, t3, t4
+	seqz	t2, t2
+	bnez	t2, BR6
+	j	BR5
+BR4:
+	lw	t4, 4(sp)
+	lw	t5, 8(sp)
+	slt	t3, t4, t5
+	lw	t5, 8(sp)
+	li	t6, 1
+	sub	t4, t5, t6
+	xor	t5, t4, x0
+	seqz	t5, t5
+	or	t4, t3, t5
+	xor	t3, t4, x0
+	snez	t3, t3
+	bnez	t3, BR8
+	j	BR7
+BR5:
+	li	t4, 6
+	sw	t4, 12(sp)
+	lw	t5, 12(sp)
+	li	t6, 6
+	xor	t4, t5, t6
+	seqz	t4, t4
+	bnez	t4, BR9
+	j	BR1
+BR6:
+	li	t6, 1
+	sub	t5, x0, t6
+	mv	a0, t5
+	addi	sp, sp, 16
+	ret
+BR8:
+	lw	a0, 4(sp)
+	li	a1, 1
+	add	t6, a0, a1
+	sw	t6, 4(sp)
+	j	BR4
+BR7:
+	li	t6, 1
+	sw	t6, 8(sp)
+	lw	a0, 4(sp)
+	li	a1, 1
+	add	t6, a0, a1
+	sw	t6, 4(sp)
+	j	BR2
+BR9:
+	li	a0, 10
+	lw	a1, 12(sp)
+	or	t6, a0, a1
+	xor	a0, t6, x0
+	snez	a0, a0
+	li	a1, 8
+	mul	t6, a1, a0
+	mv	a0, t6
+	addi	sp, sp, 16
+	ret
